@@ -1,140 +1,311 @@
-# Adapters Guide
+# Data Providers & Adapters Guide
 
-The platform uses two adapters: **AlpacaDataAdapter** for real-time market data and **PublicComExecAdapter** for order execution. Both communicate exclusively through the EventBus.
+The platform uses a **bring-your-own-data (BYOD)** architecture for market data and **PublicComExecAdapter** for order execution. All data flows through the EventBus.
 
-## Alpaca Data Adapter
+## Data Ingestion Overview
 
-`trading_platform.adapters.alpaca.adapter.AlpacaDataAdapter`
+Data enters the platform through three paths:
 
-The Alpaca adapter provides real-time market data via WebSocket streams and historical data via REST.
+| Path | Use Case |
+|------|----------|
+| **File providers** (CSV, Parquet) | Historical data replay and backtesting |
+| **REST/WebSocket ingestion** | External systems pushing data in real time |
+| **Custom DataProvider** | Any data source via Python |
 
-### Components
+All paths publish to the same EventBus channels (`quote`, `trade`, `bar`), so strategies and the dashboard work identically regardless of data source.
 
-| Component | Class | Description |
-|-----------|-------|-------------|
-| Facade | `AlpacaDataAdapter` | Unified interface implementing `DataAdapter` ABC |
-| Stock stream | `AlpacaStockStream` | SIP/IEX WebSocket (JSON) — quotes, trades, bars, status, LULD |
-| Options stream | `AlpacaOptionsStream` | OPRA WebSocket (msgpack) — option quotes and trades |
-| REST client | `AlpacaClient` | Historical bars, snapshots, latest quotes/trades |
-| Instrument provider | `AlpacaInstrumentProvider` | Load and search tradable instruments |
-| Parsers | `parse_stock_*`, `parse_option_*` | Convert raw messages to domain models |
+---
 
-### SIP Stock Stream
+## DataProvider ABC
 
-Connects to `wss://stream.data.alpaca.markets/v2/sip` (or `/v2/iex` for the free feed).
+`trading_platform.data.provider.DataProvider`
 
-**Data types:**
-
-| Type | Domain Model | EventBus Channel |
-|------|-------------|------------------|
-| Quotes | `QuoteTick` | `Channel.QUOTE` |
-| Trades | `TradeTick` | `Channel.TRADE` |
-| Bars | `Bar` | `Channel.BAR` |
-| Trading status | `TradingStatus` | `Channel.STATUS` |
-| LULD bands | `LULD` | `Channel.STATUS` |
-
-**Features:**
-- Automatic authentication on connect
-- Reconnection with exponential backoff
-- Tracks `messages_received`, `last_message_time`, `reconnect_count`
-
-### OPRA Options Stream
-
-Connects to `wss://stream.data.alpaca.markets/v1beta1/opra`. Messages are msgpack-encoded for bandwidth efficiency.
-
-**Limits:** Maximum 1,000 quote subscriptions (`MAX_QUOTE_SUBSCRIPTIONS`).
-
-**Data types:**
-
-| Type | Domain Model | EventBus Channel |
-|------|-------------|------------------|
-| Option quotes | `QuoteTick` | `Channel.QUOTE` |
-| Option trades | `TradeTick` | `Channel.TRADE` |
-
-### REST Client
-
-`AlpacaClient` provides historical and snapshot data via HTTP:
+All data providers implement this interface:
 
 ```python
-from trading_platform.adapters.alpaca.client import AlpacaClient
-from trading_platform.adapters.alpaca.config import AlpacaConfig
+from trading_platform.data.provider import DataProvider
 
-config = AlpacaConfig(api_key="...", api_secret="...")
-client = AlpacaClient(config)
-await client.start()
+class DataProvider(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable provider name."""
 
-# Historical bars
-bars = await client.get_bars("AAPL", timeframe="1Min", limit=100)
+    @abstractmethod
+    async def connect(self) -> None:
+        """Initialize the data source."""
 
-# Latest quote
-quote = await client.get_latest_quote("AAPL")
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Clean up resources."""
 
-# Snapshot (latest trade, quote, bar)
-snapshot = await client.get_snapshot("AAPL")
+    @property
+    @abstractmethod
+    def is_connected(self) -> bool: ...
 
-# Historical trades
-trades = await client.get_trades("AAPL", limit=50)
+    async def get_historical_bars(self, symbol, start, end, timeframe="1min") -> list[Bar]:
+        """Override if provider supports historical data."""
+        return []
 
-# Historical quotes
-quotes = await client.get_quotes("AAPL", limit=50)
+    async def stream_bars(self, symbols) -> AsyncIterator[Bar]:
+        """Override for live bar streaming."""
+        return; yield
 
-await client.close()
+    async def stream_quotes(self, symbols) -> AsyncIterator[QuoteTick]:
+        """Override for live quote streaming."""
+        return; yield
+
+    async def stream_trades(self, symbols) -> AsyncIterator[TradeTick]:
+        """Override for live trade streaming."""
+        return; yield
 ```
 
-**Methods:**
+---
 
-| Method | Description |
-|--------|-------------|
-| `get_bars(symbol, timeframe, start, end, limit, feed, adjustment)` | Historical bars |
-| `get_trades(symbol, start, end, limit, feed)` | Historical trades |
-| `get_quotes(symbol, start, end, limit, feed)` | Historical quotes |
-| `get_snapshot(symbol, feed)` | Latest snapshot (trade + quote + bar) |
-| `get_latest_trade(symbol, feed)` | Most recent trade |
-| `get_latest_quote(symbol, feed)` | Most recent quote |
+## DataManager
 
-Rate limit: 10,000 requests/minute with automatic retry (up to 5 retries).
+`trading_platform.data.manager.DataManager`
 
-### Instrument Provider
+The DataManager orchestrates all data providers and publishes data to the EventBus.
 
 ```python
-from trading_platform.adapters.alpaca.provider import AlpacaInstrumentProvider
+from trading_platform.core.events import EventBus
+from trading_platform.data.manager import DataManager
+from trading_platform.data.config import DataConfig
 
-provider = AlpacaInstrumentProvider(config)
-await provider.start()
+bus = EventBus()
+config = DataConfig(csv_directory="/data/csvs")
+dm = DataManager(bus, config)
 
-# Load all stock instruments
-count = await provider.load_stock_instruments()
+# Register providers
+dm.register_provider(my_provider)
 
-# Look up by symbol
-instrument = provider.get_instrument("AAPL")
+# Start all providers
+await dm.start()
 
-# Search by name or symbol
-results = provider.search("Apple")
+# Programmatic ingestion
+await dm.publish_bar({"symbol": "AAPL", "open": 185.0, ...})
+await dm.publish_quote({"symbol": "AAPL", "bid_price": 185.0, ...})
+await dm.publish_trade({"symbol": "AAPL", "price": 185.25, ...})
 
-# Get all loaded instruments
-all_instruments = provider.get_all_instruments()
+# Check status
+dm.get_provider_status()   # [{"name": "csv:/data", "connected": true}]
+dm.get_ingestion_stats()   # {"bars_received": 500, "quotes_received": 0, ...}
 
-await provider.close()
+# Stop all providers
+await dm.stop()
 ```
 
-### Subscription Management
+---
+
+## CsvBarProvider
+
+`trading_platform.data.file_provider.CsvBarProvider`
+
+Loads historical bars from CSV files or directories.
+
+**Expected CSV format:**
+
+```csv
+timestamp,symbol,open,high,low,close,volume
+2024-01-15T09:30:00,AAPL,185.50,186.20,185.30,186.00,125000
+2024-01-15T09:31:00,AAPL,186.00,186.50,185.80,186.30,80000
+```
+
+**Usage:**
 
 ```python
-# Subscribe to data
-await adapter.subscribe_quotes(["AAPL", "MSFT"])
-await adapter.subscribe_trades(["AAPL", "MSFT"])
-await adapter.subscribe_bars(["AAPL", "MSFT"])
+from trading_platform.data.file_provider import CsvBarProvider
 
-# Unsubscribe
-await adapter.unsubscribe(["MSFT"])
+# Single file
+provider = CsvBarProvider("/data/bars.csv")
+
+# Directory (loads all *.csv files)
+provider = CsvBarProvider("/data/csv_dir/")
+
+# With replay speed (2x real-time)
+provider = CsvBarProvider("/data/bars.csv", replay_speed=2.0)
+
+await provider.connect()
+
+# Stream bars
+async for bar in provider.stream_bars([]):
+    print(bar.symbol, bar.close)
+
+# Historical query
+bars = await provider.get_historical_bars("AAPL", start, end)
 ```
 
-### Reconnection and Error Handling
+---
 
-- WebSocket streams auto-reconnect with exponential backoff
-- REST client retries failed requests up to `MAX_RETRIES` (5)
-- Parse errors are logged but don't crash the stream
-- Connection errors are published to `Channel.ERROR`
+## ParquetBarProvider
+
+`trading_platform.data.file_provider.ParquetBarProvider`
+
+Same interface as CsvBarProvider but reads Parquet files. Requires the `pyarrow` optional dependency.
+
+```bash
+pip install algo-trading-platform[parquet]
+```
+
+```python
+from trading_platform.data.file_provider import ParquetBarProvider
+
+provider = ParquetBarProvider("/data/bars.parquet")
+await provider.connect()
+```
+
+---
+
+## REST & WebSocket Ingestion
+
+The platform exposes endpoints for external data sources to push data in real time. These are automatically mounted when `data_manager` is provided to `create_app()`.
+
+### REST Endpoints
+
+**POST /api/data/bars** — Ingest bar data (single or batch):
+
+```bash
+# Single bar
+curl -X POST http://localhost:8080/api/data/bars \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"AAPL","open":185.0,"high":186.0,"low":184.5,"close":185.5,"volume":10000,"timestamp":"2024-01-15T09:30:00"}'
+
+# Batch
+curl -X POST http://localhost:8080/api/data/bars \
+  -H "Content-Type: application/json" \
+  -d '[{"symbol":"AAPL",...}, {"symbol":"MSFT",...}]'
+```
+
+**POST /api/data/quotes** — Ingest quote data:
+
+```bash
+curl -X POST http://localhost:8080/api/data/quotes \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"AAPL","bid_price":185.0,"bid_size":100,"ask_price":185.5,"ask_size":200,"timestamp":"2024-01-15T09:30:00"}'
+```
+
+**POST /api/data/trades** — Ingest trade data:
+
+```bash
+curl -X POST http://localhost:8080/api/data/trades \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"AAPL","price":185.25,"size":100,"timestamp":"2024-01-15T09:30:00"}'
+```
+
+**GET /api/data/status** — Ingestion statistics:
+
+```json
+{"bars_received": 500, "quotes_received": 1000, "trades_received": 200, "providers": 1}
+```
+
+**GET /api/data/providers** — Provider status:
+
+```json
+{"providers": [{"name": "csv:/data/bars.csv", "connected": true}]}
+```
+
+### WebSocket Ingestion
+
+Connect to `ws://localhost:8080/ws/data` for streaming ingestion:
+
+```python
+import websockets, json, asyncio
+
+async def stream_data():
+    async with websockets.connect("ws://localhost:8080/ws/data") as ws:
+        # Send a bar
+        await ws.send(json.dumps({
+            "type": "bar",
+            "data": {
+                "symbol": "AAPL", "open": 185.0, "high": 186.0,
+                "low": 184.5, "close": 185.5, "volume": 10000,
+                "timestamp": "2024-01-15T09:30:00"
+            }
+        }))
+        resp = await ws.recv()  # {"status": "ok", "type": "bar"}
+
+        # Send a quote
+        await ws.send(json.dumps({
+            "type": "quote",
+            "data": {
+                "symbol": "AAPL", "bid_price": 185.0, "bid_size": 100,
+                "ask_price": 185.5, "ask_size": 200,
+                "timestamp": "2024-01-15T09:30:00"
+            }
+        }))
+
+        # Send a trade
+        await ws.send(json.dumps({
+            "type": "trade",
+            "data": {
+                "symbol": "AAPL", "price": 185.25, "size": 100,
+                "timestamp": "2024-01-15T09:30:00"
+            }
+        }))
+```
+
+---
+
+## Writing Custom Providers
+
+Implement the `DataProvider` ABC to bring any data source into the platform:
+
+```python
+from collections.abc import AsyncIterator
+from trading_platform.core.models import Bar, QuoteTick
+from trading_platform.data.provider import DataProvider
+
+class MyExchangeProvider(DataProvider):
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+        self._connected = False
+        self._ws = None
+
+    @property
+    def name(self) -> str:
+        return "my-exchange"
+
+    async def connect(self) -> None:
+        self._ws = await my_exchange_sdk.connect(self._api_key)
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        if self._ws:
+            await self._ws.close()
+        self._connected = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def stream_bars(self, symbols: list[str]) -> AsyncIterator[Bar]:
+        async for raw in self._ws.bars():
+            yield Bar(
+                symbol=raw["sym"],
+                open=raw["o"], high=raw["h"],
+                low=raw["l"], close=raw["c"],
+                volume=raw["v"],
+                timestamp=raw["t"],
+            )
+
+    async def stream_quotes(self, symbols: list[str]) -> AsyncIterator[QuoteTick]:
+        async for raw in self._ws.quotes():
+            yield QuoteTick(
+                symbol=raw["sym"],
+                bid_price=raw["bp"], bid_size=raw["bs"],
+                ask_price=raw["ap"], ask_size=raw["as"],
+                timestamp=raw["t"],
+            )
+```
+
+Register it with the DataManager:
+
+```python
+provider = MyExchangeProvider(api_key="...")
+data_manager.register_provider(provider)
+await data_manager.start()
+```
 
 ---
 
@@ -319,49 +490,7 @@ The adapter publishes to these channels:
 
 ---
 
-## Writing Custom Adapters
-
-### DataAdapter ABC
-
-To implement a custom data adapter:
-
-```python
-from trading_platform.adapters.base import DataAdapter
-
-class MyDataAdapter(DataAdapter):
-    async def connect(self) -> None:
-        """Connect to the data source."""
-        ...
-
-    async def disconnect(self) -> None:
-        """Disconnect from the data source."""
-        ...
-
-    async def subscribe_quotes(self, symbols: list[str]) -> None:
-        """Subscribe to quote updates for symbols."""
-        ...
-
-    async def subscribe_trades(self, symbols: list[str]) -> None:
-        """Subscribe to trade updates for symbols."""
-        ...
-
-    async def subscribe_bars(self, symbols: list[str]) -> None:
-        """Subscribe to bar updates for symbols."""
-        ...
-
-    async def unsubscribe(self, symbols: list[str]) -> None:
-        """Unsubscribe from all data for symbols."""
-        ...
-
-    @property
-    def is_connected(self) -> bool:
-        """Return True if connected to the data source."""
-        ...
-```
-
-Publish parsed data to the EventBus using `Channel.QUOTE`, `Channel.TRADE`, `Channel.BAR`.
-
-### ExecAdapter ABC
+## ExecAdapter ABC
 
 To implement a custom execution adapter:
 

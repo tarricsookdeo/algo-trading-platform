@@ -9,27 +9,28 @@ The algo trading platform is a production-oriented, event-driven system built in
 │                       Dashboard (FastAPI + WebSocket)                     │
 │   REST API: /api/status, /api/portfolio, /api/orders, /api/strategies    │
 │   WebSocket: /ws (quotes, trades, bars, metrics, portfolio, risk)        │
+│   Data Ingestion: POST /api/data/bars, /quotes, /trades; WS /ws/data    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                              Event Bus                                   │
 │  Market: quote │ trade │ bar │ status     Strategy: signal │ lifecycle   │
 │  Exec: order.submitted │ .filled │ ...   Risk: check.* │ alert │ halt  │
 │  System: system │ error                  Portfolio: portfolio │ account  │
 ├───────────────┬──────────────────┬───────────────────┬──────────────────┤
-│  Alpaca Data  │   Public.com     │  Strategy Manager  │  Risk Manager   │
-│   Adapter     │   Exec Adapter   │                    │                 │
+│  DataManager  │   Public.com     │  Strategy Manager  │  Risk Manager   │
+│  (BYOD)       │   Exec Adapter   │                    │                 │
 │               │                  │  ┌──────────────┐  │  Pre-trade:     │
 │ ┌───────────┐ │  Order placement │  │  Strategy     │  │  6 checks      │
-│ │ SIP Stock │ │  Cancel/replace  │  │  ┌──────────┐│  │                 │
-│ │ Stream    │ │  Portfolio sync  │  │  │ Context  ││  │  Post-trade:    │
-│ │ (WS/JSON) │ │  Account info   │  │  └──────────┘│  │  2 checks       │
-│ ├───────────┤ │                  │  │  on_quote()  │  │                 │
-│ │ OPRA Opts │ │  Auth:           │  │  on_trade()  │  │  Halt/resume    │
-│ │ Stream    │ │  ApiKeyAuthConfig│  │  on_bar()    │  │                 │
-│ │ (WS/msgpk)│ │  Auto-refresh   │  │  on_signal() │  │                 │
-│ ├───────────┤ │                  │  └──────────────┘  │                 │
-│ │ REST      │ │                  │                    │                 │
-│ │ Client    │ │                  │                    │                 │
-│ │ (httpx)   │ │                  │                    │                 │
+│ │ CSV/Parq  │ │  Cancel/replace  │  │  ┌──────────┐│  │                 │
+│ │ Providers │ │  Portfolio sync  │  │  │ Context  ││  │  Post-trade:    │
+│ ├───────────┤ │  Account info   │  │  └──────────┘│  │  2 checks       │
+│ │ REST      │ │                  │  │  on_quote()  │  │                 │
+│ │ Ingestion │ │  Auth:           │  │  on_trade()  │  │  Halt/resume    │
+│ ├───────────┤ │  ApiKeyAuthConfig│  │  on_bar()    │  │                 │
+│ │ WebSocket │ │  Auto-refresh   │  │  on_signal() │  │                 │
+│ │ Ingestion │ │                  │  └──────────────┘  │                 │
+│ ├───────────┤ │                  │                    │                 │
+│ │ Custom    │ │                  │                    │                 │
+│ │ Providers │ │                  │                    │                 │
 │ └───────────┘ │                  │                    │                 │
 ├───────────────┴──────────────────┴───────────────────┴──────────────────┤
 │                           Core Domain                                    │
@@ -47,15 +48,16 @@ Every component publishes and subscribes to events on named channels. This desig
 - **Observability** — The dashboard subscribes to all events for real-time monitoring
 - **Testability** — Components can be tested in isolation with a mock EventBus
 
-### Event Flow: Market Data → Dashboard
+### Event Flow: Data Ingestion → Dashboard
 
 ```
-Alpaca WebSocket → parse message → publish(Channel.QUOTE, QuoteTick)
-                                        │
-                    ┌───────────────────┤
-                    ▼                    ▼
-            DashboardWSManager    StrategyManager
-            (broadcast to UI)     (dispatch to strategies)
+DataProvider.stream_bars()  ─┐
+REST POST /api/data/bars     ├→ DataManager → publish(Channel.BAR, Bar)
+WebSocket /ws/data           ─┘                    │
+                                   ┌───────────────┤
+                                   ▼                ▼
+                           DashboardWSManager    StrategyManager
+                           (broadcast to UI)     (dispatch to strategies)
 ```
 
 ### Event Flow: Strategy → Execution
@@ -98,15 +100,16 @@ _track_order() (async polling)
 1. Load configuration (config.toml + .env)
 2. Initialize structured logging (structlog)
 3. Create EventBus
-4. Create AlpacaDataAdapter → connect() → authenticate WebSocket
-5. Subscribe to configured symbols (trades, quotes, bars)
-6. Create PublicComExecAdapter → connect() → authenticate API
-7. Start portfolio refresh loop
-8. Create RiskManager with RiskConfig
-9. Create StrategyManager → wire_events() → subscribe to market data channels
-10. Create Dashboard (FastAPI + DashboardWSManager) → start()
-11. Start uvicorn server
-12. Publish system ready event
+4. Create DataManager with DataConfig
+5. Register file providers (CsvBarProvider / ParquetBarProvider) if configured
+6. Start DataManager → connect and stream all registered providers
+7. Create PublicComExecAdapter → connect() → authenticate API
+8. Start portfolio refresh loop
+9. Create RiskManager with RiskConfig
+10. Create StrategyManager → wire_events() → subscribe to market data channels
+11. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
+12. Start uvicorn server
+13. Publish system ready event
 ```
 
 ### Shutdown Sequence
@@ -117,7 +120,7 @@ _track_order() (async polling)
 3. StrategyManager.unwire_events() → unsubscribe from channels
 4. DashboardWSManager.stop() → close WebSocket connections
 5. PublicComExecAdapter.disconnect() → cancel portfolio refresh, close client
-6. AlpacaDataAdapter.disconnect() → close WebSocket streams, close REST client
+6. DataManager.stop() → disconnect all providers, cancel streaming tasks
 7. Uvicorn server shutdown
 ```
 
@@ -125,7 +128,7 @@ _track_order() (async polling)
 
 The platform is built entirely on `asyncio`:
 
-- **WebSocket streams** — Long-lived tasks reading from Alpaca's SIP and OPRA feeds
+- **Data streaming** — Long-lived tasks consuming from DataProvider async iterators
 - **Event bus** — `asyncio.gather` dispatches to all subscribers concurrently
 - **Order tracking** — `asyncio.create_task` spawns a background poller for each order
 - **Portfolio refresh** — Periodic `asyncio.sleep` loop fetching portfolio state
@@ -141,11 +144,11 @@ trading_platform.main
     ├── core.events (EventBus)
     ├── core.enums (Channel)
     │
-    ├── adapters.alpaca.adapter (AlpacaDataAdapter)
-    │   ├── adapters.alpaca.stream (AlpacaStockStream, AlpacaOptionsStream)
-    │   ├── adapters.alpaca.client (AlpacaClient)
-    │   ├── adapters.alpaca.provider (AlpacaInstrumentProvider)
-    │   └── adapters.alpaca.parse (parse_stock_*, parse_option_*)
+    ├── data.manager (DataManager)
+    │   ├── data.provider (DataProvider ABC)
+    │   ├── data.file_provider (CsvBarProvider, ParquetBarProvider)
+    │   ├── data.config (DataConfig)
+    │   └── data.ingestion_server (mount_ingestion_routes)
     │
     ├── adapters.public_com.adapter (PublicComExecAdapter)
     │   ├── adapters.public_com.client (PublicComClient)
@@ -167,9 +170,14 @@ trading_platform.main
 
 ### Market Data Pipeline
 
-1. **Alpaca WebSocket** receives raw JSON (stocks) or msgpack (options) messages
-2. **Parsers** (`adapters/alpaca/parse.py`) convert to domain models (`QuoteTick`, `TradeTick`, `Bar`)
-3. **Adapter** publishes to EventBus on `Channel.QUOTE`, `Channel.TRADE`, `Channel.BAR`
+Data enters the platform through three paths, all converging on the EventBus:
+
+1. **File providers** — `CsvBarProvider` / `ParquetBarProvider` load historical data and yield `Bar` objects via async iterators
+2. **REST ingestion** — External systems POST to `/api/data/bars`, `/api/data/quotes`, `/api/data/trades`
+3. **WebSocket ingestion** — External systems stream data via `ws://host:port/ws/data`
+
+All paths flow through `DataManager`, which publishes to `Channel.QUOTE`, `Channel.TRADE`, and `Channel.BAR`:
+
 4. **StrategyManager** dispatches to all active strategies via `dispatch_quote()`, `dispatch_trade()`, `dispatch_bar()`
 5. **DashboardWSManager** broadcasts to connected WebSocket clients
 

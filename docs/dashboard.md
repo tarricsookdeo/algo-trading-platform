@@ -12,11 +12,11 @@ The web UI displays:
 
 | Panel | Description |
 |-------|-------------|
-| **Quotes** | Real-time bid/ask/spread for subscribed symbols |
+| **Quotes** | Real-time bid/ask/spread for active symbols |
 | **Trade Feed** | Live trade stream with uptick/downtick coloring |
-| **Stream Status** | Connection state for SIP and OPRA WebSocket streams |
+| **Data Providers** | Registered data providers and connection status |
+| **Ingestion Stats** | Bars, quotes, and trades received from all sources |
 | **System Metrics** | Messages/sec, total messages, memory usage, uptime, connected clients |
-| **Subscriptions** | Active symbols with add/remove controls |
 | **Event Log** | Recent platform events with severity filtering |
 | **Portfolio** | Current positions with quantities and P&L |
 | **Orders** | Active orders with cancel buttons |
@@ -28,7 +28,7 @@ The web UI displays:
 
 ### `GET /api/status`
 
-Platform and stream status.
+Platform status and data ingestion stats.
 
 **Response:**
 
@@ -38,72 +38,19 @@ Platform and stream status.
   "total_events": 45231,
   "events_per_second": 152.3,
   "subscribers": 12,
-  "stock_stream": {
-    "connected": true,
-    "messages": 38000,
-    "reconnects": 0
-  },
-  "options_stream": {
-    "connected": true,
-    "messages": 7231,
-    "reconnects": 0
+  "data_providers": [
+    {"name": "csv:/data/bars.csv", "connected": true}
+  ],
+  "ingestion": {
+    "bars_received": 500,
+    "quotes_received": 1000,
+    "trades_received": 200,
+    "providers": 1
   }
 }
 ```
 
----
-
-### `GET /api/subscriptions`
-
-Currently subscribed symbols.
-
-**Response:**
-
-```json
-{
-  "symbols": ["AAPL", "AMZN", "GOOGL", "MSFT", "TSLA"]
-}
-```
-
----
-
-### `POST /api/subscribe`
-
-Subscribe to a new symbol.
-
-**Request body:**
-
-```json
-{
-  "symbol": "NVDA"
-}
-```
-
-**Response:**
-
-```json
-{
-  "status": "subscribed",
-  "symbol": "NVDA"
-}
-```
-
----
-
-### `DELETE /api/subscribe/{symbol}`
-
-Unsubscribe from a symbol.
-
-**Example:** `DELETE /api/subscribe/NVDA`
-
-**Response:**
-
-```json
-{
-  "status": "unsubscribed",
-  "symbol": "NVDA"
-}
-```
+The `data_providers` and `ingestion` fields are included when a `DataManager` is configured.
 
 ---
 
@@ -307,6 +254,21 @@ Profit and loss summary.
 
 ---
 
+### Data Ingestion Endpoints
+
+The platform exposes REST and WebSocket endpoints for external data ingestion. These are automatically mounted when `data_manager` is provided to `create_app()`.
+
+See [Data Providers & Adapters](adapters.md#rest--websocket-ingestion) for full endpoint documentation, including:
+
+- `POST /api/data/bars` — Ingest bar data (single or batch)
+- `POST /api/data/quotes` — Ingest quote data
+- `POST /api/data/trades` — Ingest trade data
+- `GET /api/data/status` — Ingestion statistics
+- `GET /api/data/providers` — Provider status
+- `WebSocket /ws/data` — Streaming ingestion
+
+---
+
 ## WebSocket API
 
 Connect to `ws://localhost:8080/ws` for real-time updates.
@@ -374,7 +336,7 @@ The backend is a standard FastAPI application created by `create_app()`. To add 
 ```python
 from trading_platform.dashboard.app import create_app
 
-app, ws_manager = create_app(event_bus, adapter=adapter, ...)
+app, ws_manager = create_app(event_bus, data_manager=data_manager, ...)
 
 @app.get("/api/custom")
 async def custom_endpoint():

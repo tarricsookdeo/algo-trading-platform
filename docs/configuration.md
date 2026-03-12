@@ -6,24 +6,22 @@ The platform uses two configuration sources: `.env` for secrets and `config.toml
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ALPACA_API_KEY` | Yes | Alpaca API key for market data access |
-| `ALPACA_API_SECRET` | Yes | Alpaca API secret |
 | `PUBLIC_API_SECRET` | No | Public.com API secret key for order execution |
 | `PUBLIC_ACCOUNT_ID` | No | Public.com account identifier |
 
-The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCOUNT_ID` are not set. Market data streaming and the dashboard work without execution credentials.
+The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCOUNT_ID` are not set. Data ingestion, strategies, and the dashboard work without execution credentials.
 
 ## Config File (`config.toml`)
 
-### `[alpaca]` — Market Data Settings
+### `[data]` — Data Ingestion Settings
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `feed` | string | `"sip"` | Data feed: `"sip"` (full market, requires subscription) or `"iex"` (free tier, IEX-only) |
-| `base_url` | string | `"https://data.alpaca.markets"` | Alpaca data REST API base URL |
-| `trading_base_url` | string | `"https://api.alpaca.markets"` | Alpaca trading API base URL |
-| `stock_ws_url` | string | `"wss://stream.data.alpaca.markets/v2/sip"` | Stock WebSocket stream URL (change to `/v2/iex` for IEX feed) |
-| `options_ws_url` | string | `"wss://stream.data.alpaca.markets/v1beta1/opra"` | Options WebSocket stream URL (OPRA feed) |
+| `ingestion_enabled` | bool | `true` | Enable REST and WebSocket data ingestion endpoints |
+| `csv_directory` | string | `""` | Path to CSV file or directory (loads all `*.csv` files if directory) |
+| `parquet_directory` | string | `""` | Path to Parquet file or directory (requires `[parquet]` extra) |
+| `replay_speed` | float | `0.0` | Replay speed multiplier for file providers (`0` = instant, `1.0` = real-time, `2.0` = 2x) |
+| `max_bars_per_request` | int | `10000` | Maximum bars per REST ingestion request |
 
 ### `[public_com]` — Execution Settings
 
@@ -58,7 +56,7 @@ The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCO
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `log_level` | string | `"INFO"` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `symbols` | list | `["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]` | Symbols to subscribe on startup |
+| `symbols` | list | `["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]` | Default symbol list for strategies |
 
 ## Environment Variable Precedence
 
@@ -124,24 +122,49 @@ max_portfolio_drawdown = 0.20
 symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "SPY", "QQQ", "IWM"]
 ```
 
-### Paper Trading / Data-Only Mode
+### CSV Replay Mode
+
+Replay historical data from CSV files:
+
+```toml
+[data]
+csv_directory = "/path/to/your/csvs"
+replay_speed = 1.0  # Real-time replay
+
+[platform]
+log_level = "DEBUG"
+```
+
+### REST Ingestion Mode
+
+Accept data from external systems via REST API:
+
+```toml
+[data]
+ingestion_enabled = true
+
+[dashboard]
+port = 8080
+
+[platform]
+log_level = "INFO"
+```
+
+### Data-Only Mode (No Execution)
 
 To run without execution (omit Public.com credentials):
 
 ```bash
-# .env — only Alpaca credentials
-ALPACA_API_KEY=your_key
-ALPACA_API_SECRET=your_secret
+# .env — no credentials needed for data-only mode
 ```
 
 ```toml
 # config.toml
-[alpaca]
-feed = "iex"  # Free tier for development
+[data]
+csv_directory = "/path/to/csvs"
 
 [platform]
 log_level = "DEBUG"
-symbols = ["AAPL"]
 ```
 
 ## CLI Options

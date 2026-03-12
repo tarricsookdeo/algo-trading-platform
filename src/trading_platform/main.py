@@ -1,6 +1,6 @@
 """Platform entry point.
 
-Boots the event bus, Alpaca adapter, Public.com exec adapter, risk manager,
+Boots the event bus, data manager, Public.com exec adapter, risk manager,
 strategy manager, and dashboard. Handles graceful shutdown on SIGINT / SIGTERM.
 """
 
@@ -14,8 +14,6 @@ from pathlib import Path
 
 import uvicorn
 
-from trading_platform.adapters.alpaca.adapter import AlpacaDataAdapter
-from trading_platform.adapters.alpaca.config import AlpacaConfig
 from trading_platform.adapters.public_com.adapter import PublicComExecAdapter
 from trading_platform.adapters.public_com.config import PublicComConfig
 from trading_platform.core.config import load_settings
@@ -24,6 +22,9 @@ from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
 from trading_platform.dashboard.app import create_app
 from trading_platform.dashboard.ws import DashboardWSManager
+from trading_platform.data.config import DataConfig
+from trading_platform.data.file_provider import CsvBarProvider
+from trading_platform.data.manager import DataManager
 from trading_platform.risk.manager import RiskManager
 from trading_platform.risk.models import RiskConfig
 from trading_platform.strategy.manager import StrategyManager
@@ -35,7 +36,7 @@ BANNER = r"""
  / ___ \| | (_| | (_) | | || | | (_| | (_| | | | | | (_| |
 /_/   \_\_|\__, |\___/  |_||_|  \__,_|\__,_|_|_| |_|\__, |
            |___/                                     |___/
-           P L A T F O R M   v0.1.0
+           P L A T F O R M   v0.2.0
 """
 
 
@@ -68,24 +69,28 @@ async def run(args: argparse.Namespace) -> None:
     log.info(
         "starting platform",
         symbols=settings.platform.symbols,
-        feed=settings.alpaca.feed,
         dashboard_port=settings.dashboard.port,
     )
 
     # ── Core ───────────────────────────────────────────────────────────
     event_bus = EventBus()
 
-    # ── Alpaca Data Adapter ────────────────────────────────────────────
-    alpaca_config = AlpacaConfig(
-        api_key=settings.alpaca.api_key,
-        api_secret=settings.alpaca.api_secret,
-        feed=settings.alpaca.feed,
-        stock_ws_url=settings.alpaca.stock_ws_url,
-        options_ws_url=settings.alpaca.options_ws_url,
-        rest_base_url=settings.alpaca.base_url,
-        trading_base_url=settings.alpaca.trading_base_url,
+    # ── Data Manager ──────────────────────────────────────────────────
+    data_config = DataConfig(
+        ingestion_enabled=settings.data.ingestion_enabled,
+        csv_directory=settings.data.csv_directory,
+        parquet_directory=settings.data.parquet_directory,
+        replay_speed=settings.data.replay_speed,
+        max_bars_per_request=settings.data.max_bars_per_request,
     )
-    adapter = AlpacaDataAdapter(alpaca_config, event_bus)
+    data_manager = DataManager(event_bus, data_config)
+
+    # Register file providers if directories are configured
+    if data_config.csv_directory:
+        csv_provider = CsvBarProvider(
+            data_config.csv_directory, replay_speed=data_config.replay_speed
+        )
+        data_manager.register_provider(csv_provider)
 
     # ── Public.com Exec Adapter ────────────────────────────────────────
     exec_adapter: PublicComExecAdapter | None = None
@@ -127,7 +132,7 @@ async def run(args: argparse.Namespace) -> None:
     # ── Dashboard ──────────────────────────────────────────────────────
     app, ws_manager = create_app(
         event_bus,
-        adapter=adapter,
+        data_manager=data_manager,
         exec_adapter=exec_adapter,
         strategy_manager=strategy_manager,
         risk_manager=risk_manager,
@@ -146,14 +151,8 @@ async def run(args: argparse.Namespace) -> None:
 
     # ── Start everything ───────────────────────────────────────────────
     try:
-        await adapter.connect()
-
-        # Subscribe to configured symbols
-        symbols = settings.platform.symbols
-        await adapter.subscribe_trades(symbols)
-        await adapter.subscribe_quotes(symbols)
-        await adapter.subscribe_bars(symbols)
-        log.info("subscribed to symbols", symbols=symbols)
+        await data_manager.start()
+        log.info("data manager started")
 
         # Connect exec adapter if configured
         if exec_adapter:
@@ -201,7 +200,7 @@ async def run(args: argparse.Namespace) -> None:
         await ws_manager.stop()
         if exec_adapter:
             await exec_adapter.disconnect()
-        await adapter.disconnect()
+        await data_manager.stop()
         server.should_exit = True
         try:
             await asyncio.wait_for(server_task, timeout=5.0)

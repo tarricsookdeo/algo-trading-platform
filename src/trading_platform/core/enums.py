@@ -38,12 +38,6 @@ class BarType(StrEnum):
     UPDATED = "updated"
 
 
-class DataFeed(StrEnum):
-    SIP = "sip"
-    IEX = "iex"
-    OPRA = "opra"
-
-
 class Channel(StrEnum):
     """Event bus channels."""
     QUOTE = "quote"

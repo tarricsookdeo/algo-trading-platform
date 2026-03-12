@@ -1,8 +1,7 @@
-"""Tests for Phase 7: Dashboard endpoints."""
+"""Tests for dashboard endpoints."""
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from trading_platform.core.events import EventBus
 from trading_platform.dashboard.app import create_app
+from trading_platform.data.manager import DataManager
 from trading_platform.risk.manager import RiskManager
 from trading_platform.risk.models import RiskConfig
 
@@ -20,23 +20,12 @@ def bus():
 
 
 @pytest.fixture
-def mock_adapter():
-    adp = MagicMock()
-    adp.stock_stream = MagicMock()
-    adp.stock_stream.is_connected = True
-    adp.stock_stream.messages_received = 1000
-    adp.stock_stream.reconnect_count = 0
-    adp.stock_stream._trade_symbols = {"AAPL", "MSFT"}
-    adp.stock_stream._quote_symbols = {"AAPL", "MSFT"}
-    adp.options_stream = MagicMock()
-    adp.options_stream.is_connected = True
-    adp.options_stream.messages_received = 500
-    adp.options_stream.reconnect_count = 0
-    adp.subscribe_trades = AsyncMock()
-    adp.subscribe_quotes = AsyncMock()
-    adp.subscribe_bars = AsyncMock()
-    adp.unsubscribe = AsyncMock()
-    return adp
+def mock_data_manager(bus):
+    dm = DataManager(bus)
+    dm.bars_received = 500
+    dm.quotes_received = 1000
+    dm.trades_received = 200
+    return dm
 
 
 @pytest.fixture
@@ -77,10 +66,10 @@ def risk_manager(bus):
 
 
 @pytest.fixture
-def client(bus, mock_adapter, mock_exec, mock_strategy_manager, risk_manager):
+def client(bus, mock_data_manager, mock_exec, mock_strategy_manager, risk_manager):
     app, _ = create_app(
         bus,
-        adapter=mock_adapter,
+        data_manager=mock_data_manager,
         exec_adapter=mock_exec,
         strategy_manager=mock_strategy_manager,
         risk_manager=risk_manager,
@@ -108,35 +97,18 @@ class TestStatus:
         data = resp.json()
         assert data["status"] == "running"
         assert "total_events" in data
-        assert "stock_stream" in data
-        assert data["stock_stream"]["connected"] is True
+        assert "data_providers" in data
+        assert "ingestion" in data
+        assert data["ingestion"]["bars_received"] == 500
 
-
-# ── Subscriptions ─────────────────────────────────────────────────────
-
-
-class TestSubscriptions:
-    def test_get_subscriptions(self, client):
-        resp = client.get("/api/subscriptions")
+    def test_status_without_data_manager(self, bus):
+        app, _ = create_app(bus)
+        c = TestClient(app)
+        resp = c.get("/api/status")
         assert resp.status_code == 200
         data = resp.json()
-        assert "AAPL" in data["symbols"]
-
-    def test_subscribe(self, client, mock_adapter):
-        resp = client.post("/api/subscribe", json={"symbol": "TSLA"})
-        assert resp.status_code == 200
-        assert resp.json()["symbol"] == "TSLA"
-        mock_adapter.subscribe_trades.assert_awaited()
-
-    def test_subscribe_empty_symbol(self, client):
-        resp = client.post("/api/subscribe", json={"symbol": ""})
-        assert resp.status_code == 400
-
-    def test_unsubscribe(self, client, mock_adapter):
-        resp = client.delete("/api/subscribe/AAPL")
-        assert resp.status_code == 200
-        assert resp.json()["symbol"] == "AAPL"
-        mock_adapter.unsubscribe.assert_awaited()
+        assert data["status"] == "running"
+        assert "data_providers" not in data
 
 
 # ── Portfolio ─────────────────────────────────────────────────────────
@@ -150,8 +122,8 @@ class TestPortfolio:
         assert "positions" in data
         assert data["account"]["equity"] == 100000
 
-    def test_get_portfolio_no_exec(self, bus, mock_adapter):
-        app, _ = create_app(bus, adapter=mock_adapter)
+    def test_get_portfolio_no_exec(self, bus, mock_data_manager):
+        app, _ = create_app(bus, data_manager=mock_data_manager)
         c = TestClient(app)
         resp = c.get("/api/portfolio")
         assert resp.status_code == 200
@@ -175,8 +147,8 @@ class TestOrders:
         assert resp.json()["status"] == "cancel_requested"
         mock_exec.cancel_order.assert_awaited_once_with("order-1")
 
-    def test_cancel_order_no_exec(self, bus, mock_adapter):
-        app, _ = create_app(bus, adapter=mock_adapter)
+    def test_cancel_order_no_exec(self, bus, mock_data_manager):
+        app, _ = create_app(bus, data_manager=mock_data_manager)
         c = TestClient(app)
         resp = c.post("/api/orders/order-1/cancel")
         assert resp.status_code == 503
@@ -206,8 +178,8 @@ class TestStrategies:
         assert resp.json()["status"] == "stopped"
         mock_strategy_manager.stop_strategy.assert_awaited_once_with("sma_cross")
 
-    def test_strategies_no_manager(self, bus, mock_adapter):
-        app, _ = create_app(bus, adapter=mock_adapter)
+    def test_strategies_no_manager(self, bus, mock_data_manager):
+        app, _ = create_app(bus, data_manager=mock_data_manager)
         c = TestClient(app)
         resp = c.get("/api/strategies")
         assert resp.json()["strategies"] == []
@@ -230,8 +202,8 @@ class TestRisk:
         assert resp.status_code == 200
         assert "violations" in resp.json()
 
-    def test_risk_no_manager(self, bus, mock_adapter):
-        app, _ = create_app(bus, adapter=mock_adapter)
+    def test_risk_no_manager(self, bus, mock_data_manager):
+        app, _ = create_app(bus, data_manager=mock_data_manager)
         c = TestClient(app)
         resp = c.get("/api/risk")
         assert resp.json()["risk"] == {}
@@ -250,10 +222,92 @@ class TestPnl:
         assert data["strategy_pnl"]["sma_cross"] == 250.0
         assert data["cumulative_pnl"] == 250.0
 
-    def test_pnl_no_managers(self, bus, mock_adapter):
-        app, _ = create_app(bus, adapter=mock_adapter)
+    def test_pnl_no_managers(self, bus, mock_data_manager):
+        app, _ = create_app(bus, data_manager=mock_data_manager)
         c = TestClient(app)
         resp = c.get("/api/pnl")
         data = resp.json()
         assert data["daily_pnl"] == 0.0
         assert data["cumulative_pnl"] == 0.0
+
+
+# ── Data Ingestion Endpoints ──────────────────────────────────────────
+
+
+class TestDataIngestion:
+    def test_ingest_bar(self, client, mock_data_manager):
+        bar_data = {
+            "symbol": "AAPL",
+            "open": 185.0,
+            "high": 186.0,
+            "low": 184.5,
+            "close": 185.5,
+            "volume": 10000,
+            "timestamp": "2024-01-15T09:30:00",
+        }
+        resp = client.post("/api/data/bars", json=bar_data)
+        assert resp.status_code == 200
+        assert resp.json()["ingested"] == 1
+
+    def test_ingest_bars_batch(self, client, mock_data_manager):
+        bars = [
+            {
+                "symbol": "AAPL",
+                "open": 185.0,
+                "high": 186.0,
+                "low": 184.5,
+                "close": 185.5,
+                "volume": 10000,
+                "timestamp": "2024-01-15T09:30:00",
+            },
+            {
+                "symbol": "MSFT",
+                "open": 380.0,
+                "high": 381.0,
+                "low": 379.0,
+                "close": 380.5,
+                "volume": 5000,
+                "timestamp": "2024-01-15T09:30:00",
+            },
+        ]
+        resp = client.post("/api/data/bars", json=bars)
+        assert resp.status_code == 200
+        assert resp.json()["ingested"] == 2
+
+    def test_ingest_quote(self, client, mock_data_manager):
+        quote_data = {
+            "symbol": "AAPL",
+            "bid_price": 185.0,
+            "bid_size": 100,
+            "ask_price": 185.5,
+            "ask_size": 200,
+            "timestamp": "2024-01-15T09:30:00",
+        }
+        resp = client.post("/api/data/quotes", json=quote_data)
+        assert resp.status_code == 200
+        assert resp.json()["ingested"] == 1
+
+    def test_ingest_trade(self, client, mock_data_manager):
+        trade_data = {
+            "symbol": "AAPL",
+            "price": 185.25,
+            "size": 100,
+            "timestamp": "2024-01-15T09:30:00",
+        }
+        resp = client.post("/api/data/trades", json=trade_data)
+        assert resp.status_code == 200
+        assert resp.json()["ingested"] == 1
+
+    def test_data_status(self, client):
+        resp = client.get("/api/data/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "bars_received" in data
+        assert "quotes_received" in data
+        assert "trades_received" in data
+
+    def test_data_providers(self, client):
+        resp = client.get("/api/data/providers")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "providers" in data

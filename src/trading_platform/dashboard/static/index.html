@@ -103,6 +103,12 @@
   .feed-card .stat { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 12px; }
   .feed-card .stat .val { color: var(--text-primary); font-weight: 600; }
 
+  /* ── Provider chip ─────────────────────────────────── */
+  .provider-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background: var(--bg-tertiary); border-radius: 3px; font-size: 11px; margin: 2px; }
+  .provider-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .provider-dot.on { background: var(--green); }
+  .provider-dot.off { background: var(--red); }
+
   /* ── Quotes Table ───────────────────────────────────── */
   .quotes-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .quotes-table th { text-align: left; padding: 4px 8px; color: var(--text-secondary); font-weight: 600; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-secondary); }
@@ -140,15 +146,6 @@
   .metric-card .label { font-size: 10px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; }
   .metric-card .value { font-size: 20px; font-weight: 700; color: var(--text-primary); }
   .metric-card .unit { font-size: 10px; color: var(--text-muted); }
-
-  /* ── Subscription Manager ───────────────────────────── */
-  .sub-input-row { display: flex; gap: 4px; margin-bottom: 8px; }
-  .sub-input-row input { flex: 1; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); font-family: inherit; font-size: 12px; outline: none; }
-  .sub-input-row input:focus { border-color: var(--blue); }
-  .sub-input-row button, .sub-remove { padding: 4px 10px; background: var(--blue); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 600; }
-  .sub-remove { background: var(--red); font-size: 10px; padding: 2px 6px; }
-  .sub-list { display: flex; flex-wrap: wrap; gap: 4px; }
-  .sub-chip { display: flex; align-items: center; gap: 4px; padding: 3px 8px; background: var(--bg-tertiary); border-radius: 3px; font-size: 11px; }
 
   /* ── Portfolio ───────────────────────────────────────── */
   .position-row { display: flex; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--bg-tertiary); font-size: 12px; }
@@ -213,16 +210,14 @@
   <!-- Feed Status -->
   <div class="feed-status">
     <div class="feed-card">
-      <h3>Stock Stream (SIP)</h3>
-      <div class="stat"><span>Status</span><span class="val" id="stockStatus">--</span></div>
-      <div class="stat"><span>Messages</span><span class="val" id="stockMsgs">0</span></div>
-      <div class="stat"><span>Reconnects</span><span class="val" id="stockRecon">0</span></div>
+      <h3>Data Ingestion</h3>
+      <div class="stat"><span>Bars</span><span class="val" id="ingBars">0</span></div>
+      <div class="stat"><span>Quotes</span><span class="val" id="ingQuotes">0</span></div>
+      <div class="stat"><span>Trades</span><span class="val" id="ingTrades">0</span></div>
     </div>
     <div class="feed-card">
-      <h3>Options Stream (OPRA)</h3>
-      <div class="stat"><span>Status</span><span class="val" id="optStatus">--</span></div>
-      <div class="stat"><span>Messages</span><span class="val" id="optMsgs">0</span></div>
-      <div class="stat"><span>Reconnects</span><span class="val" id="optRecon">0</span></div>
+      <h3>Data Providers</h3>
+      <div id="providerList"><span style="color:var(--text-muted);font-size:11px">No providers</span></div>
     </div>
     <div class="feed-card">
       <h3>System</h3>
@@ -283,7 +278,7 @@
       <div class="metrics-grid">
         <div class="metric-card"><div class="label">Msg/sec</div><div class="value" id="mMsgSec">0</div></div>
         <div class="metric-card"><div class="label">Total Messages</div><div class="value" id="mTotal">0</div></div>
-        <div class="metric-card"><div class="label">Subscriptions</div><div class="value" id="mSubs">0</div></div>
+        <div class="metric-card"><div class="label">Providers</div><div class="value" id="mProviders">0</div></div>
         <div class="metric-card"><div class="label">Memory</div><div class="value" id="mMem">0</div><div class="unit">MB</div></div>
         <div class="metric-card"><div class="label">Uptime</div><div class="value" id="mUptime">0</div><div class="unit">sec</div></div>
         <div class="metric-card"><div class="label">WS Clients</div><div class="value" id="mClients">0</div></div>
@@ -319,18 +314,8 @@
     </div>
   </div>
 
-  <!-- Right column: subscriptions + orders -->
+  <!-- Right column: orders -->
   <div class="right-col">
-    <div class="panel" style="flex:1">
-      <div class="panel-header">Subscriptions</div>
-      <div class="panel-body">
-        <div class="sub-input-row">
-          <input id="subInput" placeholder="AAPL" maxlength="10">
-          <button onclick="addSymbol()">Add</button>
-        </div>
-        <div class="sub-list" id="subList"></div>
-      </div>
-    </div>
     <div class="panel" style="flex:1">
       <div class="panel-header">Open Orders <span id="orderCount" style="color:var(--text-muted)">0</span></div>
       <div class="panel-body" id="ordersBody"><div class="placeholder" id="orderPlaceholder">No open orders</div></div>
@@ -372,7 +357,7 @@ function connectWS() {
     document.getElementById('connDot').className = 'status-dot connected';
     document.getElementById('connText').textContent = 'Connected';
     addLog('info', 'Dashboard WebSocket connected');
-    loadSubscriptions(); refreshPortfolio(); refreshStrategies(); refreshRisk(); refreshPnl(); refreshOrders();
+    refreshPortfolio(); refreshStrategies(); refreshRisk(); refreshPnl(); refreshOrders();
   };
   ws.onclose = () => {
     document.getElementById('connDot').className = 'status-dot disconnected';
@@ -421,7 +406,7 @@ function onBar(d) {
 function onMetrics(d) {
   document.getElementById('mMsgSec').textContent = d.messages_per_second;
   document.getElementById('mTotal').textContent = fmtNum(d.total_messages);
-  document.getElementById('mSubs').textContent = d.active_subscribers;
+  document.getElementById('mProviders').textContent = d.providers || 0;
   document.getElementById('mMem').textContent = d.memory_mb;
   document.getElementById('mUptime').textContent = fmtUptime(d.uptime_seconds);
   document.getElementById('mClients').textContent = d.connected_clients;
@@ -433,8 +418,6 @@ function onMetrics(d) {
 function onSystem(d) {
   const level = d.level || 'info';
   addLog(level === 'warn' ? 'warn' : level === 'error' ? 'error' : 'system', `[${d.component}] ${d.message}`);
-  if (d.component === 'alpaca.stock_stream') document.getElementById('stockStatus').textContent = d.message;
-  else if (d.component === 'alpaca.options_stream') document.getElementById('optStatus').textContent = d.message;
 }
 function onError(d) { addLog('error', JSON.stringify(d)); }
 function onStatus(d) { addLog('info', `[${d.symbol}] ${d.status_message || d.status_code || JSON.stringify(d)}`); }
@@ -599,21 +582,18 @@ function addLog(level, msg) {
   container.prepend(el); while (container.children.length > MAX_LOGS) container.lastChild.remove();
 }
 
-// ── Subscriptions ──────────────────────────────────────────────────
-async function loadSubscriptions() { try { const r = await fetch('/api/subscriptions'); const d = await r.json(); renderSubscriptions(d.symbols||[]); } catch(e) {} }
-function renderSubscriptions(syms) {
-  const list = document.getElementById('subList'); list.innerHTML = '';
-  document.getElementById('mSubs').textContent = syms.length;
-  syms.forEach(s => { const chip = document.createElement('div'); chip.className = 'sub-chip'; chip.innerHTML = `${s} <button class="sub-remove" onclick="removeSymbol('${s}')">x</button>`; list.appendChild(chip); });
+// ── Data Providers ──────────────────────────────────────────────────
+function renderProviders(providers) {
+  const c = document.getElementById('providerList');
+  document.getElementById('mProviders').textContent = providers.length;
+  if (!providers || providers.length === 0) { c.innerHTML = '<span style="color:var(--text-muted);font-size:11px">No providers</span>'; return; }
+  let html = '';
+  providers.forEach(p => {
+    const dotCls = p.connected ? 'on' : 'off';
+    html += `<div class="provider-chip"><span class="provider-dot ${dotCls}"></span>${escHtml(p.name)}</div>`;
+  });
+  c.innerHTML = html;
 }
-async function addSymbol() {
-  const input = document.getElementById('subInput'); const sym = input.value.trim().toUpperCase(); if (!sym) return; input.value = '';
-  try { await fetch('/api/subscribe', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({symbol:sym})}); addLog('info', 'Subscribed to '+sym); setTimeout(loadSubscriptions, 500); } catch(e) { addLog('error', 'Failed to subscribe: '+e); }
-}
-async function removeSymbol(sym) {
-  try { await fetch(`/api/subscribe/${sym}`, {method:'DELETE'}); addLog('info', 'Unsubscribed from '+sym); setTimeout(loadSubscriptions, 500); delete quotes[sym]; const row = document.getElementById('qr-'+sym); if (row) row.remove(); } catch(e) { addLog('error', 'Failed to unsubscribe: '+e); }
-}
-document.getElementById('subInput').addEventListener('keydown', e => { if (e.key === 'Enter') addSymbol(); });
 
 // ── Log Filters ────────────────────────────────────────────────────
 document.querySelectorAll('.log-filter-btn').forEach(btn => {
@@ -633,8 +613,12 @@ function escHtml(s) { const d = document.createElement('div'); d.textContent = s
 // ── Periodic refreshes ─────────────────────────────────────────────
 async function refreshStatus() {
   try { const r = await fetch('/api/status'); const d = await r.json();
-    if (d.stock_stream) { document.getElementById('stockStatus').textContent = d.stock_stream.connected?'Connected':'Disconnected'; document.getElementById('stockMsgs').textContent = fmtNum(d.stock_stream.messages); document.getElementById('stockRecon').textContent = d.stock_stream.reconnects; }
-    if (d.options_stream) { document.getElementById('optStatus').textContent = d.options_stream.connected?'Connected':'Disconnected'; document.getElementById('optMsgs').textContent = fmtNum(d.options_stream.messages); document.getElementById('optRecon').textContent = d.options_stream.reconnects; }
+    if (d.data_providers) renderProviders(d.data_providers);
+    if (d.ingestion) {
+      document.getElementById('ingBars').textContent = fmtNum(d.ingestion.bars_received);
+      document.getElementById('ingQuotes').textContent = fmtNum(d.ingestion.quotes_received);
+      document.getElementById('ingTrades').textContent = fmtNum(d.ingestion.trades_received);
+    }
   } catch(e) {}
 }
 setInterval(refreshStatus, 5000);

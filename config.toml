@@ -1,9 +1,9 @@
-[alpaca]
-feed = "sip"
-base_url = "https://data.alpaca.markets"
-stock_ws_url = "wss://stream.data.alpaca.markets/v2/sip"
-options_ws_url = "wss://stream.data.alpaca.markets/v1beta1/opra"
-trading_base_url = "https://api.alpaca.markets"
+[data]
+ingestion_enabled = true
+csv_directory = ""
+parquet_directory = ""
+replay_speed = 0.0
+max_bars_per_request = 10000
 
 [public_com]
 poll_interval = 2.0

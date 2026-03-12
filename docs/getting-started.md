@@ -3,7 +3,6 @@
 ## Prerequisites
 
 - **Python 3.12+**
-- **Alpaca account** with an Algo Trader Plus subscription (for SIP/OPRA data feeds)
 - **Public.com account** with API access (for order execution) — optional for data-only mode
 - **pip** or a Python package manager
 
@@ -26,9 +25,7 @@ This installs the platform package (`trading_platform`) along with all dependenc
 
 | Package | Purpose |
 |---------|---------|
-| `websockets` | Alpaca WebSocket connections |
 | `httpx` | REST API client |
-| `msgpack` | OPRA options stream decoding |
 | `fastapi` | Dashboard web framework |
 | `uvicorn` | ASGI server |
 | `structlog` | Structured logging |
@@ -37,6 +34,12 @@ This installs the platform package (`trading_platform`) along with all dependenc
 | `publicdotcom-py` | Public.com SDK |
 
 Dev dependencies: `pytest`, `pytest-asyncio`.
+
+For Parquet file support:
+
+```bash
+pip install -e ".[parquet]"
+```
 
 ## Configuration
 
@@ -49,10 +52,6 @@ cp .env.example .env
 Edit `.env` with your credentials:
 
 ```bash
-# Required for market data
-ALPACA_API_KEY=your_alpaca_api_key
-ALPACA_API_SECRET=your_alpaca_api_secret
-
 # Required for order execution (optional — platform runs without these)
 PUBLIC_API_SECRET=your_public_api_secret
 PUBLIC_ACCOUNT_ID=your_public_account_id
@@ -65,12 +64,13 @@ PUBLIC_ACCOUNT_ID=your_public_account_id
 Edit `config.toml` to customize behavior:
 
 ```toml
-[alpaca]
-feed = "sip"  # "sip" for full market data, "iex" for free tier
+[data]
+csv_directory = "/path/to/csvs"  # Load historical data from CSV files
+replay_speed = 0.0               # 0 = instant, 1.0 = real-time
 
 [platform]
 log_level = "INFO"
-symbols = ["AAPL", "MSFT", "GOOGL"]  # Symbols to stream on startup
+symbols = ["AAPL", "MSFT", "GOOGL"]
 
 [dashboard]
 port = 8080
@@ -114,14 +114,13 @@ On startup you'll see:
  / ___ \| | (_| | (_) | | || | | (_| | (_| | | | | | (_| |
 /_/   \_\_|\__, |\___/  |_||_|  \__,_|\__,_|_|_| |_|\__, |
            |___/                                     |___/
-           P L A T F O R M   v0.1.0
+           P L A T F O R M   v0.2.0
 
-[info] starting platform  symbols=["AAPL","MSFT","GOOGL"] feed=sip dashboard_port=8080
+[info] starting platform  dashboard_port=8080
+[info] data manager started  providers=1
 [info] public.com exec adapter configured
 [info] risk manager initialized
 [info] strategy manager initialized
-[info] subscribed to symbols  symbols=["AAPL","MSFT","GOOGL"]
-[info] public.com exec adapter connected
 [info] strategy manager events wired
 [info] platform ready  dashboard=http://0.0.0.0:8080
 ```
@@ -137,41 +136,46 @@ If Public.com credentials are not set, the platform runs in **data-only mode**:
 Open [http://localhost:8080](http://localhost:8080) in your browser.
 
 The dashboard displays:
-- **Real-time quotes** — Bid/ask/spread with live updates
-- **Trade feed** — Uptick/downtick coloring
-- **Stream status** — Connection state and message rates
+- **Data providers** — Registered providers and connection status
+- **Ingestion stats** — Bars, quotes, and trades received
 - **System metrics** — Messages/sec, memory usage, uptime
-- **Subscription management** — Add/remove symbols
 - **Portfolio** — Positions and P&L (when execution adapter is connected)
 - **Orders** — Active orders with cancel capability
 - **Strategies** — Registered strategies with start/stop controls
 - **Risk** — Current risk state and violation history
 
-### 7. Verify Connections
+### 7. Verify Data Ingestion
 
-**Check stream status:**
+**Ingest a bar via REST:**
 
 ```bash
-curl http://localhost:8080/api/status
+curl -X POST http://localhost:8080/api/data/bars \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"AAPL","open":185.0,"high":186.0,"low":184.5,"close":185.5,"volume":10000,"timestamp":"2024-01-15T09:30:00"}'
 ```
 
 Expected response:
 
 ```json
-{
-  "status": "running",
-  "total_events": 12345,
-  "events_per_second": 150.2,
-  "subscribers": 8,
-  "stock_stream": {"connected": true, "messages": 10000, "reconnects": 0},
-  "options_stream": {"connected": true, "messages": 2345, "reconnects": 0}
-}
+{"ingested": 1}
 ```
 
-**Check subscriptions:**
+**Check ingestion stats:**
 
 ```bash
-curl http://localhost:8080/api/subscriptions
+curl http://localhost:8080/api/data/status
+```
+
+Expected response:
+
+```json
+{"bars_received": 1, "quotes_received": 0, "trades_received": 0, "providers": 0}
+```
+
+**Check platform status:**
+
+```bash
+curl http://localhost:8080/api/status
 ```
 
 **Check portfolio (when exec adapter is connected):**
@@ -189,7 +193,9 @@ pytest tests/ -v
 Tests cover:
 - EventBus pub/sub and wildcard subscriptions
 - Domain model serialization
-- Alpaca message parsing
+- DataManager provider registration and streaming
+- CSV bar provider loading and replay
+- REST and WebSocket data ingestion
 - Public.com adapter integration
 - Strategy lifecycle and manager
 - Risk checks and violations
@@ -203,12 +209,12 @@ Press `Ctrl+C` for graceful shutdown. The platform will:
 2. Unwire event subscriptions
 3. Close WebSocket connections
 4. Disconnect from Public.com
-5. Disconnect from Alpaca
+5. Stop DataManager and disconnect all providers
 6. Stop the dashboard server
 
 ## Next Steps
 
 - [Configuration Reference](configuration.md) — Tune all settings
+- [Data Providers & Adapters](adapters.md) — Bring your own data sources
 - [Strategies Guide](strategies.md) — Write your first trading strategy
 - [Risk Management](risk-management.md) — Configure risk controls
-- [Adapters Guide](adapters.md) — Deep dive into data and execution adapters

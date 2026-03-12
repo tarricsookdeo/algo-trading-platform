@@ -89,10 +89,10 @@ count = bus.subscriber_count  # int
 
 | Channel | Enum | Payload Type | Publisher |
 |---------|------|-------------|-----------|
-| `quote` | `Channel.QUOTE` | `QuoteTick` | `AlpacaDataAdapter` |
-| `trade` | `Channel.TRADE` | `TradeTick` | `AlpacaDataAdapter` |
-| `bar` | `Channel.BAR` | `Bar` | `AlpacaDataAdapter` |
-| `status` | `Channel.STATUS` | `TradingStatus` or `LULD` | `AlpacaDataAdapter` |
+| `quote` | `Channel.QUOTE` | `QuoteTick` | `DataManager` (via providers or ingestion) |
+| `trade` | `Channel.TRADE` | `TradeTick` | `DataManager` (via providers or ingestion) |
+| `bar` | `Channel.BAR` | `Bar` | `DataManager` (via providers or ingestion) |
+| `status` | `Channel.STATUS` | `TradingStatus` or `LULD` | Custom providers |
 | `error` | `Channel.ERROR` | `dict` | Various |
 
 #### `QuoteTick` Payload

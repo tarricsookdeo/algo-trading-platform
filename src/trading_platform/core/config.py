@@ -14,14 +14,12 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
-class AlpacaSettings(BaseSettings):
-    api_key: str = Field(default="", alias="ALPACA_API_KEY")
-    api_secret: str = Field(default="", alias="ALPACA_API_SECRET")
-    feed: str = "sip"
-    base_url: str = "https://data.alpaca.markets"
-    trading_base_url: str = "https://api.alpaca.markets"
-    stock_ws_url: str = "wss://stream.data.alpaca.markets/v2/sip"
-    options_ws_url: str = "wss://stream.data.alpaca.markets/v1beta1/opra"
+class DataSettings(BaseSettings):
+    ingestion_enabled: bool = True
+    csv_directory: str = ""
+    parquet_directory: str = ""
+    replay_speed: float = 0.0
+    max_bars_per_request: int = 10000
 
 
 class DashboardSettings(BaseSettings):
@@ -54,7 +52,7 @@ class PlatformSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
-    alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
+    data: DataSettings = Field(default_factory=DataSettings)
     public_com: PublicComSettings = Field(default_factory=PublicComSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     platform: PlatformSettings = Field(default_factory=PlatformSettings)
@@ -85,20 +83,19 @@ def load_settings(config_path: Path | None = None) -> Settings:
         if default_path.exists():
             toml_data = load_toml(default_path)
 
-    alpaca_data = toml_data.get("alpaca", {})
+    data_cfg = DataSettings(**toml_data.get("data", {}))
     public_com_data = toml_data.get("public_com", {})
     dashboard_data = toml_data.get("dashboard", {})
     platform_data = toml_data.get("platform", {})
     risk_data = toml_data.get("risk", {})
 
-    alpaca = AlpacaSettings(**alpaca_data)
     public_com = PublicComSettings(**public_com_data)
     dashboard = DashboardSettings(**dashboard_data)
     platform_cfg = PlatformSettings(**platform_data)
     risk = RiskSettings(**risk_data)
 
     return Settings(
-        alpaca=alpaca,
+        data=data_cfg,
         public_com=public_com,
         dashboard=dashboard,
         platform=platform_cfg,

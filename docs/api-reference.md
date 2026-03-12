@@ -213,104 +213,87 @@ class BarType(StrEnum):
     MINUTE = "minute"
     DAILY = "daily"
     UPDATED = "updated"
+```
 
-class DataFeed(StrEnum):
-    SIP = "sip"
-    IEX = "iex"
-    OPRA = "opra"
+---
+
+## Data
+
+### DataProvider (ABC)
+
+`trading_platform.data.provider.DataProvider`
+
+```python
+class DataProvider(ABC):
+    name: str  # abstract property
+    is_connected: bool  # abstract property
+
+    async def connect(self) -> None  # abstract
+    async def disconnect(self) -> None  # abstract
+    async def get_historical_bars(self, symbol: str, start: datetime, end: datetime, timeframe: str = "1min") -> list[Bar]
+    async def stream_bars(self, symbols: list[str]) -> AsyncIterator[Bar]
+    async def stream_quotes(self, symbols: list[str]) -> AsyncIterator[QuoteTick]
+    async def stream_trades(self, symbols: list[str]) -> AsyncIterator[TradeTick]
+```
+
+### DataManager
+
+`trading_platform.data.manager.DataManager`
+
+```python
+class DataManager:
+    bars_received: int
+    quotes_received: int
+    trades_received: int
+
+    def register_provider(self, provider: DataProvider) -> None
+    async def start(self) -> None
+    async def stop(self) -> None
+    def get_provider_status(self) -> list[dict[str, Any]]
+    def get_ingestion_stats(self) -> dict[str, Any]
+    async def publish_bar(self, bar_data: dict[str, Any]) -> None
+    async def publish_quote(self, quote_data: dict[str, Any]) -> None
+    async def publish_trade(self, trade_data: dict[str, Any]) -> None
+```
+
+### DataConfig
+
+`trading_platform.data.config.DataConfig`
+
+```python
+class DataConfig(BaseModel):
+    ingestion_enabled: bool = True
+    csv_directory: str = ""
+    parquet_directory: str = ""
+    replay_speed: float = 0.0
+    max_bars_per_request: int = 10000
+```
+
+### CsvBarProvider
+
+`trading_platform.data.file_provider.CsvBarProvider`
+
+```python
+class CsvBarProvider(DataProvider):
+    def __init__(self, file_path: str, replay_speed: float = 0.0)
+    # Implements all DataProvider methods
+    # Loads CSV on connect(), supports directory globbing
+```
+
+### ParquetBarProvider
+
+`trading_platform.data.file_provider.ParquetBarProvider`
+
+```python
+class ParquetBarProvider(DataProvider):
+    def __init__(self, file_path: str, replay_speed: float = 0.0)
+    # Implements all DataProvider methods
+    # Requires pyarrow: pip install algo-trading-platform[parquet]
 ```
 
 ---
 
 ## Adapters
-
-### AlpacaDataAdapter
-
-`trading_platform.adapters.alpaca.adapter.AlpacaDataAdapter`
-
-```python
-class AlpacaDataAdapter(DataAdapter):
-    stock_stream: AlpacaStockStream
-    options_stream: AlpacaOptionsStream
-    rest_client: AlpacaClient
-    instrument_provider: AlpacaInstrumentProvider
-    is_connected: bool  # property
-
-    async def connect(self) -> None
-    async def disconnect(self) -> None
-    async def subscribe_quotes(self, symbols: list[str]) -> None
-    async def subscribe_trades(self, symbols: list[str]) -> None
-    async def subscribe_bars(self, symbols: list[str]) -> None
-    async def unsubscribe(self, symbols: list[str]) -> None
-```
-
-### AlpacaStockStream
-
-`trading_platform.adapters.alpaca.stream.AlpacaStockStream`
-
-```python
-class AlpacaStockStream:
-    is_connected: bool  # property
-    messages_received: int
-    last_message_time: float
-    reconnect_count: int
-
-    async def start(self) -> None
-    async def stop(self) -> None
-    async def subscribe(self, trades: list[str] | None, quotes: list[str] | None, bars: list[str] | None) -> None
-    async def unsubscribe(self, symbols: list[str]) -> None
-```
-
-### AlpacaOptionsStream
-
-`trading_platform.adapters.alpaca.stream.AlpacaOptionsStream`
-
-```python
-class AlpacaOptionsStream:
-    MAX_QUOTE_SUBSCRIPTIONS = 1000
-    is_connected: bool  # property
-    messages_received: int
-    last_message_time: float
-    reconnect_count: int
-
-    async def start(self) -> None
-    async def stop(self) -> None
-    async def subscribe(self, trades: list[str] | None, quotes: list[str] | None) -> None
-    async def unsubscribe(self, symbols: list[str]) -> None
-```
-
-### AlpacaClient
-
-`trading_platform.adapters.alpaca.client.AlpacaClient`
-
-```python
-class AlpacaClient:
-    RATE_LIMIT = 10_000
-    MAX_RETRIES = 5
-
-    async def start(self) -> None
-    async def close(self) -> None
-    async def get_bars(self, symbol: str, timeframe: str = "1Min", start: str | datetime | None = None, end: str | datetime | None = None, limit: int = 1000, feed: str | None = None, adjustment: str = "raw") -> list[dict]
-    async def get_trades(self, symbol: str, start: str | datetime | None = None, end: str | datetime | None = None, limit: int = 1000, feed: str | None = None) -> list[dict]
-    async def get_quotes(self, symbol: str, start: str | datetime | None = None, end: str | datetime | None = None, limit: int = 1000, feed: str | None = None) -> list[dict]
-    async def get_snapshot(self, symbol: str, feed: str | None = None) -> dict
-    async def get_latest_trade(self, symbol: str, feed: str | None = None) -> dict
-    async def get_latest_quote(self, symbol: str, feed: str | None = None) -> dict
-```
-
-### AlpacaInstrumentProvider
-
-`trading_platform.adapters.alpaca.provider.AlpacaInstrumentProvider`
-
-```python
-class AlpacaInstrumentProvider:
-    async def start(self) -> None
-    async def close(self) -> None
-    async def load_stock_instruments(self) -> int
-    def get_instrument(self, symbol: str) -> Instrument | None
-    def get_all_instruments(self) -> dict[str, Instrument]
-    def search(self, query: str) -> list[Instrument]
-```
 
 ### PublicComExecAdapter
 
@@ -530,7 +513,7 @@ def check_daily_trade_count(state: RiskState, config: RiskConfig) -> tuple[bool,
 ```python
 def create_app(
     event_bus: EventBus,
-    adapter: Any = None,
+    data_manager: Any = None,
     exec_adapter: Any = None,
     strategy_manager: Any = None,
     risk_manager: Any = None,
@@ -560,7 +543,7 @@ class DashboardWSManager:
 
 ```python
 class Settings:
-    alpaca: AlpacaSettings
+    data: DataSettings
     public_com: PublicComSettings
     dashboard: DashboardSettings
     platform: PlatformSettings
