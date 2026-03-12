@@ -1,0 +1,14 @@
+[alpaca]
+feed = "sip"
+base_url = "https://data.alpaca.markets"
+stock_ws_url = "wss://stream.data.alpaca.markets/v2/sip"
+options_ws_url = "wss://stream.data.alpaca.markets/v1beta1/opra"
+trading_base_url = "https://api.alpaca.markets"
+
+[dashboard]
+host = "0.0.0.0"
+port = 8080
+
+[platform]
+log_level = "INFO"
+symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]

@@ -1,0 +1,121 @@
+"""WebSocket connection manager for the dashboard.
+
+Bridges the platform EventBus to browser clients, broadcasting market data
+and system metrics over WebSocket.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+from typing import Any
+
+from fastapi import WebSocket
+
+from trading_platform.core import clock
+from trading_platform.core.enums import Channel
+from trading_platform.core.events import EventBus
+from trading_platform.core.logging import get_logger
+
+
+class DashboardWSManager:
+    """Manages WebSocket connections from dashboard clients.
+
+    Subscribes to all EventBus channels and forwards events as JSON to
+    connected browsers. Sends periodic system metrics.
+    """
+
+    def __init__(self, event_bus: EventBus) -> None:
+        self._bus = event_bus
+        self._log = get_logger("dashboard.ws")
+        self._clients: list[WebSocket] = []
+        self._start_time = time.monotonic()
+        self._metrics_task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        """Subscribe to all event bus channels."""
+        await self._bus.subscribe("*", self._on_event)
+        self._metrics_task = asyncio.create_task(self._metrics_loop())
+        self._log.info("dashboard WS manager started")
+
+    async def stop(self) -> None:
+        await self._bus.unsubscribe("*", self._on_event)
+        if self._metrics_task:
+            self._metrics_task.cancel()
+            try:
+                await self._metrics_task
+            except asyncio.CancelledError:
+                pass
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self._clients.append(ws)
+        self._log.info("dashboard client connected", total=len(self._clients))
+
+    async def disconnect(self, ws: WebSocket) -> None:
+        if ws in self._clients:
+            self._clients.remove(ws)
+        self._log.info("dashboard client disconnected", total=len(self._clients))
+
+    async def broadcast(self, message: dict[str, Any]) -> None:
+        """Send a JSON message to all connected clients."""
+        if not self._clients:
+            return
+        text = json.dumps(message, default=str)
+        dead: list[WebSocket] = []
+        for ws in self._clients:
+            try:
+                await ws.send_text(text)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            if ws in self._clients:
+                self._clients.remove(ws)
+
+    # ── Internal ──────────────────────────────────────────────────────
+
+    async def _on_event(self, channel: str, event: Any) -> None:
+        """Forward event bus events to dashboard clients."""
+        payload: dict[str, Any]
+        if hasattr(event, "model_dump"):
+            payload = {"type": channel, "data": event.model_dump(mode="json")}
+        elif isinstance(event, dict):
+            payload = {"type": channel, "data": event}
+        else:
+            payload = {"type": channel, "data": str(event)}
+        await self.broadcast(payload)
+
+    async def _metrics_loop(self) -> None:
+        """Send system metrics every 2 seconds."""
+        while True:
+            try:
+                await asyncio.sleep(2.0)
+                uptime = time.monotonic() - self._start_time
+                try:
+                    process = os.getpid()
+                    with open(f"/proc/{process}/status") as f:
+                        mem_line = [l for l in f if l.startswith("VmRSS")]
+                    mem_kb = int(mem_line[0].split()[1]) if mem_line else 0
+                    mem_mb = mem_kb / 1024
+                except Exception:
+                    mem_mb = 0.0
+
+                metrics = {
+                    "type": "metrics",
+                    "data": {
+                        "uptime_seconds": round(uptime, 1),
+                        "messages_per_second": round(self._bus.events_per_second(), 1),
+                        "total_messages": self._bus.total_published,
+                        "active_subscribers": self._bus.subscriber_count,
+                        "memory_mb": round(mem_mb, 1),
+                        "connected_clients": len(self._clients),
+                        "timestamp": clock.now().isoformat(),
+                    },
+                }
+                await self.broadcast(metrics)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass

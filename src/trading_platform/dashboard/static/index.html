@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Algo Trading Platform</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #484f58;
+    --green: #00d672;
+    --red: #ff4444;
+    --blue: #58a6ff;
+    --yellow: #d29922;
+    --orange: #db6d28;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* ── Layout ─────────────────────────────────────────── */
+  .container {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto auto 1fr 1fr;
+    gap: 8px;
+    padding: 8px;
+    height: 100vh;
+    max-height: 100vh;
+  }
+  .header { grid-column: 1 / -1; }
+  .feed-status { grid-column: 1 / -1; }
+  .quotes-panel { grid-column: 1 / 3; grid-row: 3; }
+  .trades-panel { grid-column: 3 / 4; grid-row: 3; }
+  .event-log { grid-column: 1 / 2; grid-row: 4; }
+  .metrics-panel { grid-column: 2 / 3; grid-row: 4; }
+  .right-col { grid-column: 3 / 4; grid-row: 4; display: flex; flex-direction: column; gap: 8px; }
+
+  /* ── Panel ──────────────────────────────────────────── */
+  .panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .panel-body {
+    padding: 8px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+  .header {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .header h1 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--blue);
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 4px;
+  }
+  .status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.disconnected { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+  /* ── Feed Status Cards ──────────────────────────────── */
+  .feed-status {
+    display: flex;
+    gap: 8px;
+  }
+  .feed-card {
+    flex: 1;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+  }
+  .feed-card h3 {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+  .feed-card .stat {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px;
+    font-size: 12px;
+  }
+  .feed-card .stat .val { color: var(--text-primary); font-weight: 600; }
+
+  /* ── Quotes Table ───────────────────────────────────── */
+  .quotes-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .quotes-table th {
+    text-align: left;
+    padding: 4px 8px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary);
+    cursor: pointer;
+  }
+  .quotes-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--bg-tertiary);
+    transition: background 0.3s;
+  }
+  .quotes-table tr:hover td { background: var(--bg-tertiary); }
+  .bid { color: var(--green); }
+  .ask { color: var(--red); }
+  .flash { animation: flash-bg 0.6s ease-out; }
+  @keyframes flash-bg {
+    0% { background: rgba(88,166,255,0.2); }
+    100% { background: transparent; }
+  }
+
+  /* ── Trades Feed ────────────────────────────────────── */
+  .trade-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 4px;
+    border-bottom: 1px solid var(--bg-tertiary);
+    font-size: 12px;
+  }
+  .trade-entry .sym { font-weight: 600; width: 60px; }
+  .trade-entry .price { width: 70px; text-align: right; }
+  .trade-entry .size { width: 60px; text-align: right; color: var(--text-secondary); }
+  .trade-entry .exch { width: 30px; text-align: center; color: var(--text-muted); }
+  .trade-entry .time { color: var(--text-muted); }
+  .uptick { color: var(--green); }
+  .downtick { color: var(--red); }
+
+  /* ── Event Log ──────────────────────────────────────── */
+  .log-filters {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .log-filter-btn {
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+  }
+  .log-filter-btn.active { background: var(--bg-tertiary); color: var(--text-primary); border-color: var(--blue); }
+  .log-entry {
+    padding: 2px 4px;
+    border-bottom: 1px solid var(--bg-primary);
+    font-size: 11px;
+    display: flex;
+    gap: 8px;
+  }
+  .log-entry .ts { color: var(--text-muted); min-width: 80px; }
+  .log-entry.info .msg { color: var(--blue); }
+  .log-entry.warn .msg { color: var(--yellow); }
+  .log-entry.error .msg { color: var(--red); }
+  .log-entry.system .msg { color: var(--text-muted); }
+
+  /* ── Metrics Cards ──────────────────────────────────── */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .metric-card {
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    padding: 10px;
+    text-align: center;
+  }
+  .metric-card .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+  .metric-card .value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .metric-card .unit {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  /* ── Subscription Manager ───────────────────────────── */
+  .sub-input-row {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .sub-input-row input {
+    flex: 1;
+    padding: 4px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .sub-input-row input:focus { border-color: var(--blue); }
+  .sub-input-row button, .sub-remove {
+    padding: 4px 10px;
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .sub-remove { background: var(--red); font-size: 10px; padding: 2px 6px; }
+  .sub-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .sub-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    font-size: 11px;
+  }
+
+  /* ── Placeholder Panels ─────────────────────────────── */
+  .placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-style: italic;
+    height: 100%;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <!-- Header -->
+  <div class="header">
+    <h1>Algo Trading Platform</h1>
+    <div class="header-right">
+      <span><span class="status-dot disconnected" id="connDot"></span><span id="connText">Disconnected</span></span>
+      <span>Uptime: <span id="uptime">0s</span></span>
+      <span id="clock"></span>
+    </div>
+  </div>
+
+  <!-- Feed Status -->
+  <div class="feed-status">
+    <div class="feed-card">
+      <h3>Stock Stream (SIP)</h3>
+      <div class="stat"><span>Status</span><span class="val" id="stockStatus">--</span></div>
+      <div class="stat"><span>Messages</span><span class="val" id="stockMsgs">0</span></div>
+      <div class="stat"><span>Reconnects</span><span class="val" id="stockRecon">0</span></div>
+    </div>
+    <div class="feed-card">
+      <h3>Options Stream (OPRA)</h3>
+      <div class="stat"><span>Status</span><span class="val" id="optStatus">--</span></div>
+      <div class="stat"><span>Messages</span><span class="val" id="optMsgs">0</span></div>
+      <div class="stat"><span>Reconnects</span><span class="val" id="optRecon">0</span></div>
+    </div>
+    <div class="feed-card">
+      <h3>System</h3>
+      <div class="stat"><span>Events/sec</span><span class="val" id="evtSec">0</span></div>
+      <div class="stat"><span>Total Events</span><span class="val" id="totalEvt">0</span></div>
+      <div class="stat"><span>Clients</span><span class="val" id="wsCli">0</span></div>
+    </div>
+  </div>
+
+  <!-- Live Quotes -->
+  <div class="panel quotes-panel">
+    <div class="panel-header">Live Quotes</div>
+    <div class="panel-body">
+      <table class="quotes-table">
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Bid</th><th>Ask</th><th>Spread</th>
+            <th>Last</th><th>Volume</th><th>Updated</th>
+          </tr>
+        </thead>
+        <tbody id="quotesBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Recent Trades -->
+  <div class="panel trades-panel">
+    <div class="panel-header">Recent Trades <span id="tradeCount" style="color:var(--text-muted)">0</span></div>
+    <div class="panel-body" id="tradesBody"></div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="panel event-log">
+    <div class="panel-header">
+      Event Log
+      <div class="log-filters">
+        <button class="log-filter-btn active" data-filter="all">All</button>
+        <button class="log-filter-btn" data-filter="info">Info</button>
+        <button class="log-filter-btn" data-filter="warn">Warn</button>
+        <button class="log-filter-btn" data-filter="error">Error</button>
+        <button class="log-filter-btn" data-filter="system">System</button>
+      </div>
+    </div>
+    <div class="panel-body" id="logBody"></div>
+  </div>
+
+  <!-- System Metrics -->
+  <div class="panel metrics-panel">
+    <div class="panel-header">System Metrics</div>
+    <div class="panel-body">
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="label">Msg/sec</div><div class="value" id="mMsgSec">0</div></div>
+        <div class="metric-card"><div class="label">Total Messages</div><div class="value" id="mTotal">0</div></div>
+        <div class="metric-card"><div class="label">Subscriptions</div><div class="value" id="mSubs">0</div></div>
+        <div class="metric-card"><div class="label">Memory</div><div class="value" id="mMem">0</div><div class="unit">MB</div></div>
+        <div class="metric-card"><div class="label">Uptime</div><div class="value" id="mUptime">0</div><div class="unit">sec</div></div>
+        <div class="metric-card"><div class="label">WS Clients</div><div class="value" id="mClients">0</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column: subscriptions + placeholders -->
+  <div class="right-col">
+    <div class="panel" style="flex:1">
+      <div class="panel-header">Subscriptions</div>
+      <div class="panel-body">
+        <div class="sub-input-row">
+          <input id="subInput" placeholder="AAPL" maxlength="10">
+          <button onclick="addSymbol()">Add</button>
+        </div>
+        <div class="sub-list" id="subList"></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:0.5">
+      <div class="panel-header">Strategies</div>
+      <div class="panel-body"><div class="placeholder">No strategies active</div></div>
+    </div>
+    <div class="panel" style="flex:0.5">
+      <div class="panel-header">Positions</div>
+      <div class="panel-body"><div class="placeholder">No positions</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+const quotes = {};        // symbol -> {bid, ask, last, volume, ts}
+const lastPrices = {};    // symbol -> last trade price (for uptick/downtick)
+let tradeCount = 0;
+let logFilter = 'all';
+let ws = null;
+const MAX_TRADES = 100;
+const MAX_LOGS = 200;
+
+// ── Clock ──────────────────────────────────────────────────────────
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+// ── WebSocket ──────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('connDot').className = 'status-dot connected';
+    document.getElementById('connText').textContent = 'Connected';
+    addLog('info', 'Dashboard WebSocket connected');
+    loadSubscriptions();
+  };
+  ws.onclose = () => {
+    document.getElementById('connDot').className = 'status-dot disconnected';
+    document.getElementById('connText').textContent = 'Disconnected';
+    addLog('warn', 'Dashboard WebSocket disconnected, reconnecting...');
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = (evt) => {
+    try { handleMessage(JSON.parse(evt.data)); }
+    catch(e) {}
+  };
+}
+
+function handleMessage(msg) {
+  const {type, data} = msg;
+  if (type === 'quote') onQuote(data);
+  else if (type === 'trade') onTrade(data);
+  else if (type === 'bar') onBar(data);
+  else if (type === 'metrics') onMetrics(data);
+  else if (type === 'system') onSystem(data);
+  else if (type === 'error') onError(data);
+  else if (type === 'status') onStatus(data);
+}
+
+// ── Handlers ───────────────────────────────────────────────────────
+function onQuote(d) {
+  const sym = d.symbol;
+  if (!quotes[sym]) quotes[sym] = {};
+  quotes[sym].bid = d.bid_price;
+  quotes[sym].ask = d.ask_price;
+  quotes[sym].bidSz = d.bid_size;
+  quotes[sym].askSz = d.ask_size;
+  quotes[sym].ts = d.timestamp;
+  renderQuotes(sym);
+}
+
+function onTrade(d) {
+  const sym = d.symbol;
+  const prev = lastPrices[sym] || d.price;
+  lastPrices[sym] = d.price;
+  if (!quotes[sym]) quotes[sym] = {};
+  quotes[sym].last = d.price;
+  quotes[sym].volume = (quotes[sym].volume || 0) + d.size;
+  quotes[sym].ts = d.timestamp;
+  renderQuotes(sym);
+  addTrade(d, d.price >= prev ? 'uptick' : 'downtick');
+}
+
+function onBar(d) {
+  const sym = d.symbol;
+  if (!quotes[sym]) quotes[sym] = {};
+  quotes[sym].last = d.close;
+  quotes[sym].volume = d.volume;
+  quotes[sym].ts = d.timestamp;
+  renderQuotes(sym);
+}
+
+function onMetrics(d) {
+  document.getElementById('mMsgSec').textContent = d.messages_per_second;
+  document.getElementById('mTotal').textContent = fmtNum(d.total_messages);
+  document.getElementById('mSubs').textContent = d.active_subscribers;
+  document.getElementById('mMem').textContent = d.memory_mb;
+  document.getElementById('mUptime').textContent = fmtUptime(d.uptime_seconds);
+  document.getElementById('mClients').textContent = d.connected_clients;
+  document.getElementById('uptime').textContent = fmtUptime(d.uptime_seconds);
+  document.getElementById('evtSec').textContent = d.messages_per_second;
+  document.getElementById('totalEvt').textContent = fmtNum(d.total_messages);
+  document.getElementById('wsCli').textContent = d.connected_clients;
+}
+
+function onSystem(d) {
+  const level = d.level || 'info';
+  addLog(level === 'warn' ? 'warn' : level === 'error' ? 'error' : 'system',
+         `[${d.component}] ${d.message}`);
+  // Update stream status from system events
+  if (d.component === 'alpaca.stock_stream') {
+    document.getElementById('stockStatus').textContent = d.message;
+  } else if (d.component === 'alpaca.options_stream') {
+    document.getElementById('optStatus').textContent = d.message;
+  }
+}
+
+function onError(d) {
+  addLog('error', JSON.stringify(d));
+}
+
+function onStatus(d) {
+  addLog('info', `[${d.symbol}] ${d.status_message || d.status_code || JSON.stringify(d)}`);
+}
+
+// ── Renderers ──────────────────────────────────────────────────────
+function renderQuotes(flashSym) {
+  const tbody = document.getElementById('quotesBody');
+  const syms = Object.keys(quotes).sort();
+  // Update or create rows
+  syms.forEach(sym => {
+    const q = quotes[sym];
+    let row = document.getElementById('qr-' + sym);
+    if (!row) {
+      row = document.createElement('tr');
+      row.id = 'qr-' + sym;
+      row.innerHTML = `<td class="sym">${sym}</td><td class="bid"></td><td class="ask"></td><td></td><td></td><td></td><td></td>`;
+      tbody.appendChild(row);
+    }
+    const cells = row.cells;
+    cells[1].textContent = fmtPrice(q.bid);
+    cells[1].className = 'bid';
+    cells[2].textContent = fmtPrice(q.ask);
+    cells[2].className = 'ask';
+    const spread = (q.ask && q.bid) ? (q.ask - q.bid) : 0;
+    cells[3].textContent = spread > 0 ? spread.toFixed(2) : '--';
+    cells[4].textContent = fmtPrice(q.last);
+    cells[5].textContent = q.volume ? fmtNum(Math.round(q.volume)) : '--';
+    cells[6].textContent = q.ts ? new Date(q.ts).toLocaleTimeString() : '--';
+    if (sym === flashSym) {
+      row.classList.remove('flash');
+      void row.offsetWidth; // reflow
+      row.classList.add('flash');
+    }
+  });
+}
+
+function addTrade(d, dir) {
+  tradeCount++;
+  document.getElementById('tradeCount').textContent = tradeCount;
+  const container = document.getElementById('tradesBody');
+  const el = document.createElement('div');
+  el.className = 'trade-entry';
+  const ts = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '';
+  el.innerHTML = `<span class="sym">${d.symbol}</span><span class="price ${dir}">${fmtPrice(d.price)}</span><span class="size">${d.size}</span><span class="exch">${d.exchange || ''}</span><span class="time">${ts}</span>`;
+  container.prepend(el);
+  while (container.children.length > MAX_TRADES) container.lastChild.remove();
+}
+
+function addLog(level, msg) {
+  const container = document.getElementById('logBody');
+  const el = document.createElement('div');
+  el.className = `log-entry ${level}`;
+  el.dataset.level = level;
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML = `<span class="ts">${ts}</span><span class="msg">${escHtml(msg)}</span>`;
+  if (logFilter !== 'all' && level !== logFilter) el.style.display = 'none';
+  container.prepend(el);
+  while (container.children.length > MAX_LOGS) container.lastChild.remove();
+}
+
+// ── Subscriptions ──────────────────────────────────────────────────
+async function loadSubscriptions() {
+  try {
+    const resp = await fetch('/api/subscriptions');
+    const data = await resp.json();
+    renderSubscriptions(data.symbols || []);
+  } catch(e) {}
+}
+
+function renderSubscriptions(syms) {
+  const list = document.getElementById('subList');
+  list.innerHTML = '';
+  document.getElementById('mSubs').textContent = syms.length;
+  syms.forEach(s => {
+    const chip = document.createElement('div');
+    chip.className = 'sub-chip';
+    chip.innerHTML = `${s} <button class="sub-remove" onclick="removeSymbol('${s}')">x</button>`;
+    list.appendChild(chip);
+  });
+}
+
+async function addSymbol() {
+  const input = document.getElementById('subInput');
+  const sym = input.value.trim().toUpperCase();
+  if (!sym) return;
+  input.value = '';
+  try {
+    await fetch('/api/subscribe', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({symbol: sym})});
+    addLog('info', `Subscribed to ${sym}`);
+    setTimeout(loadSubscriptions, 500);
+  } catch(e) { addLog('error', `Failed to subscribe: ${e}`); }
+}
+
+async function removeSymbol(sym) {
+  try {
+    await fetch(`/api/subscribe/${sym}`, {method:'DELETE'});
+    addLog('info', `Unsubscribed from ${sym}`);
+    setTimeout(loadSubscriptions, 500);
+    // Remove from quotes display
+    delete quotes[sym];
+    const row = document.getElementById('qr-' + sym);
+    if (row) row.remove();
+  } catch(e) { addLog('error', `Failed to unsubscribe: ${e}`); }
+}
+
+document.getElementById('subInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addSymbol();
+});
+
+// ── Log Filters ────────────────────────────────────────────────────
+document.querySelectorAll('.log-filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    logFilter = btn.dataset.filter;
+    document.querySelectorAll('#logBody .log-entry').forEach(el => {
+      el.style.display = (logFilter === 'all' || el.dataset.level === logFilter) ? '' : 'none';
+    });
+  });
+});
+
+// ── Helpers ─────────────────────────────────────────────────────────
+function fmtPrice(v) { return v != null ? Number(v).toFixed(2) : '--'; }
+function fmtNum(n) { return n != null ? Number(n).toLocaleString() : '0'; }
+function fmtUptime(s) {
+  if (!s) return '0s';
+  const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); const sec = Math.floor(s%60);
+  return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── Fetch feed status periodically ─────────────────────────────────
+async function refreshStatus() {
+  try {
+    const resp = await fetch('/api/status');
+    const d = await resp.json();
+    if (d.stock_stream) {
+      document.getElementById('stockStatus').textContent = d.stock_stream.connected ? 'Connected' : 'Disconnected';
+      document.getElementById('stockMsgs').textContent = fmtNum(d.stock_stream.messages);
+      document.getElementById('stockRecon').textContent = d.stock_stream.reconnects;
+    }
+    if (d.options_stream) {
+      document.getElementById('optStatus').textContent = d.options_stream.connected ? 'Connected' : 'Disconnected';
+      document.getElementById('optMsgs').textContent = fmtNum(d.options_stream.messages);
+      document.getElementById('optRecon').textContent = d.options_stream.reconnects;
+    }
+  } catch(e) {}
+}
+setInterval(refreshStatus, 5000);
+
+// ── Boot ───────────────────────────────────────────────────────────
+connectWS();
+addLog('system', 'Dashboard initialized');
+refreshStatus();
+</script>
+</body>
+</html>

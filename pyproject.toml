@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "algo-trading-platform"
+version = "0.1.0"
+description = "Live algorithmic trading platform with Alpaca market data"
+requires-python = ">=3.12"
+dependencies = [
+    "websockets>=12.0",
+    "httpx>=0.27",
+    "msgpack>=1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "structlog>=24.0",
+    "python-dotenv>=1.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+trading-platform = "trading_platform.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trading_platform"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
