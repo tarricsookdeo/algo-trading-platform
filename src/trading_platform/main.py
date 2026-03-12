@@ -1,7 +1,7 @@
 """Platform entry point.
 
-Boots the event bus, Alpaca adapter, and dashboard. Handles graceful
-shutdown on SIGINT / SIGTERM.
+Boots the event bus, Alpaca adapter, Public.com exec adapter, risk manager,
+strategy manager, and dashboard. Handles graceful shutdown on SIGINT / SIGTERM.
 """
 
 from __future__ import annotations
@@ -16,12 +16,17 @@ import uvicorn
 
 from trading_platform.adapters.alpaca.adapter import AlpacaDataAdapter
 from trading_platform.adapters.alpaca.config import AlpacaConfig
+from trading_platform.adapters.public_com.adapter import PublicComExecAdapter
+from trading_platform.adapters.public_com.config import PublicComConfig
 from trading_platform.core.config import load_settings
 from trading_platform.core.enums import Channel
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
 from trading_platform.dashboard.app import create_app
 from trading_platform.dashboard.ws import DashboardWSManager
+from trading_platform.risk.manager import RiskManager
+from trading_platform.risk.models import RiskConfig
+from trading_platform.strategy.manager import StrategyManager
 
 BANNER = r"""
     _    _             _____              _ _
@@ -70,7 +75,7 @@ async def run(args: argparse.Namespace) -> None:
     # ── Core ───────────────────────────────────────────────────────────
     event_bus = EventBus()
 
-    # ── Alpaca Adapter ─────────────────────────────────────────────────
+    # ── Alpaca Data Adapter ────────────────────────────────────────────
     alpaca_config = AlpacaConfig(
         api_key=settings.alpaca.api_key,
         api_secret=settings.alpaca.api_secret,
@@ -82,8 +87,51 @@ async def run(args: argparse.Namespace) -> None:
     )
     adapter = AlpacaDataAdapter(alpaca_config, event_bus)
 
+    # ── Public.com Exec Adapter ────────────────────────────────────────
+    exec_adapter: PublicComExecAdapter | None = None
+    if settings.public_com.api_secret and settings.public_com.account_id:
+        public_config = PublicComConfig(
+            api_secret=settings.public_com.api_secret,
+            account_id=settings.public_com.account_id,
+            poll_interval=settings.public_com.poll_interval,
+            portfolio_refresh=settings.public_com.portfolio_refresh,
+        )
+        exec_adapter = PublicComExecAdapter(public_config, event_bus)
+        log.info("public.com exec adapter configured")
+    else:
+        log.info("public.com exec adapter skipped (no credentials)")
+
+    # ── Risk Manager ───────────────────────────────────────────────────
+    risk_config = RiskConfig(
+        max_position_size=settings.risk.max_position_size,
+        max_position_concentration=settings.risk.max_position_concentration,
+        max_order_value=settings.risk.max_order_value,
+        daily_loss_limit=settings.risk.daily_loss_limit,
+        max_open_orders=settings.risk.max_open_orders,
+        max_daily_trades=settings.risk.max_daily_trades,
+        max_portfolio_drawdown=settings.risk.max_portfolio_drawdown,
+        allowed_symbols=settings.risk.allowed_symbols,
+        blocked_symbols=settings.risk.blocked_symbols,
+    )
+    risk_manager = RiskManager(risk_config, event_bus)
+    log.info("risk manager initialized")
+
+    # ── Strategy Manager ───────────────────────────────────────────────
+    strategy_manager = StrategyManager(
+        event_bus=event_bus,
+        exec_adapter=exec_adapter,
+        risk_manager=risk_manager,
+    )
+    log.info("strategy manager initialized")
+
     # ── Dashboard ──────────────────────────────────────────────────────
-    app, ws_manager = create_app(event_bus, adapter=adapter)
+    app, ws_manager = create_app(
+        event_bus,
+        adapter=adapter,
+        exec_adapter=exec_adapter,
+        strategy_manager=strategy_manager,
+        risk_manager=risk_manager,
+    )
 
     # ── Shutdown handling ──────────────────────────────────────────────
     shutdown_event = asyncio.Event()
@@ -106,6 +154,15 @@ async def run(args: argparse.Namespace) -> None:
         await adapter.subscribe_quotes(symbols)
         await adapter.subscribe_bars(symbols)
         log.info("subscribed to symbols", symbols=symbols)
+
+        # Connect exec adapter if configured
+        if exec_adapter:
+            await exec_adapter.connect()
+            log.info("public.com exec adapter connected")
+
+        # Wire strategy manager events and start
+        await strategy_manager.wire_events()
+        log.info("strategy manager events wired")
 
         # Start WS manager
         await ws_manager.start()
@@ -139,7 +196,11 @@ async def run(args: argparse.Namespace) -> None:
 
     finally:
         log.info("shutting down platform")
+        await strategy_manager.stop_all()
+        await strategy_manager.unwire_events()
         await ws_manager.stop()
+        if exec_adapter:
+            await exec_adapter.disconnect()
         await adapter.disconnect()
         server.should_exit = True
         try:

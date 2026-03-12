@@ -22,6 +22,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 def create_app(
     event_bus: EventBus,
     adapter: Any = None,
+    exec_adapter: Any = None,
+    strategy_manager: Any = None,
+    risk_manager: Any = None,
 ) -> tuple[FastAPI, DashboardWSManager]:
     """Create and configure the FastAPI application.
 
@@ -31,8 +34,11 @@ def create_app(
     ws_manager = DashboardWSManager(event_bus)
     log = get_logger("dashboard.app")
 
-    # Store adapter reference for subscription management
+    # Store references for endpoint handlers
     app.state.adapter = adapter
+    app.state.exec_adapter = exec_adapter
+    app.state.strategy_manager = strategy_manager
+    app.state.risk_manager = risk_manager
     app.state.ws_manager = ws_manager
     app.state.event_bus = event_bus
 
@@ -96,6 +102,100 @@ def create_app(
             await adp.unsubscribe([symbol])
             log.info("unsubscribed from symbol via API", symbol=symbol)
         return JSONResponse({"status": "unsubscribed", "symbol": symbol})
+
+    # ── Portfolio & Orders ────────────────────────────────────────────
+
+    @app.get("/api/portfolio")
+    async def get_portfolio() -> JSONResponse:
+        ea = app.state.exec_adapter
+        if not ea:
+            return JSONResponse({"positions": [], "account": {}})
+        positions = await ea.get_positions()
+        account = await ea.get_account()
+        return JSONResponse({
+            "positions": [p.model_dump(mode="json") if hasattr(p, "model_dump") else p for p in positions],
+            "account": account,
+        })
+
+    @app.get("/api/orders")
+    async def get_orders() -> JSONResponse:
+        ea = app.state.exec_adapter
+        if not ea:
+            return JSONResponse({"orders": []})
+        tracked = getattr(ea, "_tracked_orders", {})
+        orders = []
+        for oid in list(tracked):
+            orders.append({"order_id": oid, "status": "tracked"})
+        return JSONResponse({"orders": orders})
+
+    @app.post("/api/orders/{order_id}/cancel")
+    async def cancel_order(order_id: str) -> JSONResponse:
+        ea = app.state.exec_adapter
+        if not ea:
+            return JSONResponse({"error": "no exec adapter"}, status_code=503)
+        try:
+            await ea.cancel_order(order_id)
+            return JSONResponse({"status": "cancel_requested", "order_id": order_id})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # ── Strategies ────────────────────────────────────────────────────
+
+    @app.get("/api/strategies")
+    async def get_strategies() -> JSONResponse:
+        sm = app.state.strategy_manager
+        if not sm:
+            return JSONResponse({"strategies": []})
+        return JSONResponse({"strategies": sm.get_strategy_info()})
+
+    @app.post("/api/strategies/{strategy_id}/start")
+    async def start_strategy(strategy_id: str) -> JSONResponse:
+        sm = app.state.strategy_manager
+        if not sm:
+            return JSONResponse({"error": "no strategy manager"}, status_code=503)
+        await sm.start_strategy(strategy_id)
+        return JSONResponse({"status": "started", "strategy_id": strategy_id})
+
+    @app.post("/api/strategies/{strategy_id}/stop")
+    async def stop_strategy(strategy_id: str) -> JSONResponse:
+        sm = app.state.strategy_manager
+        if not sm:
+            return JSONResponse({"error": "no strategy manager"}, status_code=503)
+        await sm.stop_strategy(strategy_id)
+        return JSONResponse({"status": "stopped", "strategy_id": strategy_id})
+
+    # ── Risk ──────────────────────────────────────────────────────────
+
+    @app.get("/api/risk")
+    async def get_risk() -> JSONResponse:
+        rm = app.state.risk_manager
+        if not rm:
+            return JSONResponse({"risk": {}})
+        return JSONResponse({"risk": rm.get_risk_state()})
+
+    @app.get("/api/risk/violations")
+    async def get_risk_violations() -> JSONResponse:
+        rm = app.state.risk_manager
+        if not rm:
+            return JSONResponse({"violations": []})
+        return JSONResponse({"violations": rm.get_violations()})
+
+    # ── P&L ───────────────────────────────────────────────────────────
+
+    @app.get("/api/pnl")
+    async def get_pnl() -> JSONResponse:
+        rm = app.state.risk_manager
+        pnl_data: dict[str, Any] = {"daily_pnl": 0.0, "cumulative_pnl": 0.0}
+        if rm:
+            pnl_data["daily_pnl"] = rm.state.daily_pnl
+        sm = app.state.strategy_manager
+        if sm:
+            strategy_pnl = {}
+            for info in sm.get_strategy_info():
+                strategy_pnl[info["strategy_id"]] = info["pnl"]
+            pnl_data["strategy_pnl"] = strategy_pnl
+            pnl_data["cumulative_pnl"] = sum(strategy_pnl.values())
+        return JSONResponse(pnl_data)
 
     # ── WebSocket ─────────────────────────────────────────────────────
 

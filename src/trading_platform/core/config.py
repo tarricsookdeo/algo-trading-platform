@@ -29,6 +29,25 @@ class DashboardSettings(BaseSettings):
     port: int = 8080
 
 
+class PublicComSettings(BaseSettings):
+    api_secret: str = Field(default="", alias="PUBLIC_API_SECRET")
+    account_id: str = Field(default="", alias="PUBLIC_ACCOUNT_ID")
+    poll_interval: float = 2.0
+    portfolio_refresh: float = 30.0
+
+
+class RiskSettings(BaseSettings):
+    max_position_size: float = 1000.0
+    max_position_concentration: float = 0.10
+    max_order_value: float = 50000.0
+    daily_loss_limit: float = -5000.0
+    max_open_orders: int = 20
+    max_daily_trades: int = 100
+    max_portfolio_drawdown: float = 0.15
+    allowed_symbols: list[str] = Field(default_factory=list)
+    blocked_symbols: list[str] = Field(default_factory=list)
+
+
 class PlatformSettings(BaseSettings):
     log_level: str = "INFO"
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"])
@@ -36,8 +55,10 @@ class PlatformSettings(BaseSettings):
 
 class Settings(BaseSettings):
     alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
+    public_com: PublicComSettings = Field(default_factory=PublicComSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     platform: PlatformSettings = Field(default_factory=PlatformSettings)
+    risk: RiskSettings = Field(default_factory=RiskSettings)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -65,11 +86,21 @@ def load_settings(config_path: Path | None = None) -> Settings:
             toml_data = load_toml(default_path)
 
     alpaca_data = toml_data.get("alpaca", {})
+    public_com_data = toml_data.get("public_com", {})
     dashboard_data = toml_data.get("dashboard", {})
     platform_data = toml_data.get("platform", {})
+    risk_data = toml_data.get("risk", {})
 
     alpaca = AlpacaSettings(**alpaca_data)
+    public_com = PublicComSettings(**public_com_data)
     dashboard = DashboardSettings(**dashboard_data)
     platform_cfg = PlatformSettings(**platform_data)
+    risk = RiskSettings(**risk_data)
 
-    return Settings(alpaca=alpaca, dashboard=dashboard, platform=platform_cfg)
+    return Settings(
+        alpaca=alpaca,
+        public_com=public_com,
+        dashboard=dashboard,
+        platform=platform_cfg,
+        risk=risk,
+    )
