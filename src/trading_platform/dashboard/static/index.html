@@ -476,6 +476,15 @@ function connectWS() {
 }
 
 function handleMessage(msg) {
+  // Handle batched messages from dashboard throttler
+  if (msg.type === 'batch' && Array.isArray(msg.updates)) {
+    msg.updates.forEach(u => handleSingleMessage(u));
+    return;
+  }
+  handleSingleMessage(msg);
+}
+
+function handleSingleMessage(msg) {
   const {type, data, category} = msg;
   if (type === 'quote') onQuote(data);
   else if (type === 'trade') onTrade(data);

@@ -1,7 +1,9 @@
 """WebSocket connection manager for the dashboard.
 
 Bridges the platform EventBus to browser clients, broadcasting market data
-and system metrics over WebSocket.
+and system metrics over WebSocket.  When a DashboardThrottler is provided,
+high-frequency market data events are buffered and flushed at a fixed
+interval instead of being broadcast immediately.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from trading_platform.core import clock
 from trading_platform.core.enums import Channel
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
+from trading_platform.core.metrics import PerformanceMetrics
+from trading_platform.dashboard.throttler import DashboardThrottler
 
 
 class DashboardWSManager:
@@ -27,21 +31,35 @@ class DashboardWSManager:
     connected browsers. Sends periodic system metrics.
     """
 
-    def __init__(self, event_bus: EventBus) -> None:
+    # Channels that go through the throttler when enabled
+    _THROTTLED_CHANNELS = {"quote", "trade", "bar"}
+
+    def __init__(
+        self,
+        event_bus: EventBus,
+        throttler: DashboardThrottler | None = None,
+        perf_metrics: PerformanceMetrics | None = None,
+    ) -> None:
         self._bus = event_bus
         self._log = get_logger("dashboard.ws")
         self._clients: list[WebSocket] = []
         self._start_time = time.monotonic()
         self._metrics_task: asyncio.Task[None] | None = None
+        self._throttler = throttler
+        self._perf = perf_metrics
 
     async def start(self) -> None:
         """Subscribe to all event bus channels."""
         await self._bus.subscribe("*", self._on_event)
         self._metrics_task = asyncio.create_task(self._metrics_loop())
+        if self._throttler:
+            self._throttler.start(self.broadcast)
         self._log.info("dashboard WS manager started")
 
     async def stop(self) -> None:
         await self._bus.unsubscribe("*", self._on_event)
+        if self._throttler:
+            await self._throttler.stop()
         if self._metrics_task:
             self._metrics_task.cancel()
             try:
@@ -63,6 +81,8 @@ class DashboardWSManager:
         """Send a JSON message to all connected clients."""
         if not self._clients:
             return
+        if self._perf:
+            self._perf.record_broadcast()
         text = json.dumps(message, default=str)
         dead: list[WebSocket] = []
         for ws in self._clients:
@@ -78,6 +98,11 @@ class DashboardWSManager:
 
     async def _on_event(self, channel: str, event: Any) -> None:
         """Forward event bus events to dashboard clients."""
+        # Route high-frequency data through throttler if available
+        if self._throttler and channel in self._THROTTLED_CHANNELS:
+            await self._throttler.buffer_event(channel, event)
+            return
+
         payload: dict[str, Any]
         if hasattr(event, "model_dump"):
             payload = {"type": channel, "data": event.model_dump(mode="json")}

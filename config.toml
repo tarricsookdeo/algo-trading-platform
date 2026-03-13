@@ -42,9 +42,18 @@ roll_enabled = false
 roll_target_dte = 30
 check_interval_seconds = 60
 
+[performance]
+message_queue_size = 50000
+message_queue_mode = "lossy"
+consumer_batch_size = 100
+consumer_flush_interval_ms = 10
+dedup_quotes_in_batch = true
+
 [dashboard]
 host = "0.0.0.0"
 port = 8080
+update_interval_ms = 100
+max_trades_per_flush = 50
 
 [platform]
 log_level = "INFO"

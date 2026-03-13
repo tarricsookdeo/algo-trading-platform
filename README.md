@@ -14,6 +14,7 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 - **Strategy framework** — Abstract base class with lifecycle management, event-driven signal generation, and order submission
 - **Risk management** — 6 pre-trade checks, 2 post-trade checks, greeks-aware risk checks (delta, gamma, theta, vega limits), automatic trading halts, and configurable limits
 - **Monitoring dashboard** — FastAPI-powered UI with real-time WebSocket updates, REST API, and system metrics for all order types including trailing stops, scaled orders, brackets, and options greeks
+- **Performance pipeline** — Internal message queue with batch processing, quote deduplication, lossy/lossless modes, dashboard throttling, and real-time performance metrics (throughput, latency, queue depth)
 - **Event-driven architecture** — Async pub/sub event bus connecting all components with wildcard subscriptions
 
 ## Architecture
@@ -179,7 +180,9 @@ src/trading_platform/
 │   ├── logging.py           # Structured logging (structlog)
 │   ├── clock.py             # System clock
 │   ├── enums.py             # Enumerations (Channel, OrderSide, etc.)
-│   └── order_router.py      # OrderRouter — dispatches by AssetClass
+│   ├── order_router.py      # OrderRouter — dispatches by AssetClass
+│   ├── message_queue.py     # Async bounded message queue (lossy/lossless)
+│   └── metrics.py           # PerformanceMetrics (throughput, latency, drops)
 ├── data/
 │   ├── provider.py          # DataProvider abstract base class
 │   ├── manager.py           # DataManager (provider orchestration)
@@ -228,6 +231,7 @@ src/trading_platform/
 └── dashboard/
     ├── app.py               # FastAPI application and REST endpoints
     ├── ws.py                # WebSocket manager (DashboardWSManager)
+    ├── throttler.py         # DashboardThrottler (buffer → dedup → batch flush)
     └── static/index.html    # Dashboard UI
 docs/
 ├── README.md                # Documentation index
@@ -301,9 +305,18 @@ max_portfolio_gamma = 100.0        # Max absolute portfolio gamma
 max_daily_theta = -200.0           # Max daily theta decay
 max_portfolio_vega = 1000.0        # Max absolute portfolio vega
 
+[performance]
+message_queue_size = 50000         # Internal queue capacity
+message_queue_mode = "lossy"       # "lossy" (drop oldest) or "lossless" (backpressure)
+consumer_batch_size = 100          # Messages per consumer batch
+consumer_flush_interval_ms = 10    # Max wait before flushing batch (ms)
+dedup_quotes_in_batch = true       # Deduplicate quotes per symbol in each batch
+
 [dashboard]
 host = "0.0.0.0"
 port = 8080
+update_interval_ms = 100           # Dashboard throttler flush interval (ms)
+max_trades_per_flush = 50          # Max trade events per throttled flush
 
 [platform]
 log_level = "INFO"
@@ -323,6 +336,7 @@ Full documentation is available in the [`docs/`](docs/) directory:
 - [Data Providers & Adapters](docs/adapters.md) — BYOD data providers, Public.com, crypto, and options execution
 - [Strategy Development](docs/strategies.md) — writing and running trading strategies
 - [Risk Management](docs/risk-management.md) — risk checks, greeks limits, halts, configuration
+- [Performance Guide](docs/performance.md) — message queue, throttling, metrics, tuning
 - [Dashboard Guide](docs/dashboard.md) — UI features, REST API, WebSocket API
 - [Event Bus Reference](docs/event-bus.md) — channels, payloads, subscription patterns
 - [API Reference](docs/api-reference.md) — all public classes and methods
@@ -347,3 +361,5 @@ pytest tests/ -v
 - [x] **Phase C**: Options strategy builder (verticals, iron condors, straddles, strangles, butterflies, calendars)
 - [x] **Phase D**: Trailing stops, scaled orders, and bracket integration
 - [x] **Phase E**: Greeks-aware risk checks and expiration management
+- [x] **Phase F**: Dashboard updates, documentation, and examples
+- [x] **Performance Phase 1**: Internal message queue, dashboard throttling, batch endpoints, performance metrics

@@ -91,12 +91,24 @@ The platform starts in **data-only mode** if no execution credentials are set. D
 | `max_position_vega` | float | `None` | Per-position vega limit (optional) |
 | `greeks_refresh_interval_seconds` | float | `30.0` | Greeks cache refresh interval |
 
+### `[performance]` — Performance Tuning
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `message_queue_size` | int | `50000` | Maximum messages in the internal queue |
+| `message_queue_mode` | string | `"lossy"` | Queue full behavior: `"lossy"` (drop oldest) or `"lossless"` (back-pressure) |
+| `consumer_batch_size` | int | `100` | Max messages consumed per batch |
+| `consumer_flush_interval_ms` | int | `10` | Max wait time before flushing an incomplete batch (ms) |
+| `dedup_quotes_in_batch` | bool | `true` | Deduplicate quotes per symbol within each batch (keeps latest) |
+
 ### `[dashboard]` — Dashboard Settings
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `host` | string | `"0.0.0.0"` | Dashboard bind address |
 | `port` | int | `8080` | Dashboard port |
+| `update_interval_ms` | int | `100` | Dashboard throttler flush interval in milliseconds |
+| `max_trades_per_flush` | int | `50` | Maximum trade events per throttled flush |
 
 ### `[platform]` — General Settings
 
@@ -235,6 +247,25 @@ max_portfolio_delta = 300.0
 max_portfolio_gamma = 50.0
 max_daily_theta = -100.0
 max_portfolio_vega = 500.0
+```
+
+### High-Throughput Performance Tuning
+
+For high-frequency data ingestion with dashboard throttling:
+
+```toml
+[performance]
+message_queue_size = 100000
+message_queue_mode = "lossy"
+consumer_batch_size = 200
+consumer_flush_interval_ms = 5
+dedup_quotes_in_batch = true
+
+[dashboard]
+host = "0.0.0.0"
+port = 8080
+update_interval_ms = 200      # Slower dashboard updates to reduce WS overhead
+max_trades_per_flush = 20     # Cap trades per flush for large volumes
 ```
 
 ### Data-Only Mode (No Execution)

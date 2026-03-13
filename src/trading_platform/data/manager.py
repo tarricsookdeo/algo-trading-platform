@@ -1,7 +1,8 @@
 """DataManager — orchestrates all data ingestion into the platform.
 
 Registers and manages DataProvider instances, runs their streaming tasks,
-and publishes all data to the EventBus as normalized events.
+and publishes all data to the EventBus as normalized events.  Optionally
+routes messages through a MessageQueue for decoupled, batched processing.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from typing import Any
 from trading_platform.core.enums import Channel
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
+from trading_platform.core.message_queue import MessageQueue
+from trading_platform.core.metrics import PerformanceMetrics
 from trading_platform.data.config import DataConfig
 from trading_platform.data.provider import DataProvider
 
@@ -21,12 +24,20 @@ log = get_logger("data.manager")
 class DataManager:
     """Orchestrates all data ingestion into the platform."""
 
-    def __init__(self, event_bus: EventBus, config: DataConfig | None = None) -> None:
+    def __init__(
+        self,
+        event_bus: EventBus,
+        config: DataConfig | None = None,
+        message_queue: MessageQueue | None = None,
+        perf_metrics: PerformanceMetrics | None = None,
+    ) -> None:
         self._bus = event_bus
         self._config = config or DataConfig()
         self._providers: dict[str, DataProvider] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
+        self._mq = message_queue
+        self._perf = perf_metrics
 
         # Ingestion stats
         self.bars_received: int = 0
@@ -91,17 +102,35 @@ class DataManager:
     async def publish_bar(self, bar_data: dict[str, Any]) -> None:
         """Publish a bar event from ingestion."""
         self.bars_received += 1
-        await self._bus.publish(Channel.BAR, bar_data)
+        if self._perf:
+            self._perf.record_received()
+        if self._mq:
+            bar_data["_channel"] = str(Channel.BAR)
+            await self._mq.enqueue(bar_data)
+        else:
+            await self._bus.publish(Channel.BAR, bar_data)
 
     async def publish_quote(self, quote_data: dict[str, Any]) -> None:
         """Publish a quote event from ingestion."""
         self.quotes_received += 1
-        await self._bus.publish(Channel.QUOTE, quote_data)
+        if self._perf:
+            self._perf.record_received()
+        if self._mq:
+            quote_data["_channel"] = str(Channel.QUOTE)
+            await self._mq.enqueue(quote_data)
+        else:
+            await self._bus.publish(Channel.QUOTE, quote_data)
 
     async def publish_trade(self, trade_data: dict[str, Any]) -> None:
         """Publish a trade event from ingestion."""
         self.trades_received += 1
-        await self._bus.publish(Channel.TRADE, trade_data)
+        if self._perf:
+            self._perf.record_received()
+        if self._mq:
+            trade_data["_channel"] = str(Channel.TRADE)
+            await self._mq.enqueue(trade_data)
+        else:
+            await self._bus.publish(Channel.TRADE, trade_data)
 
     async def _run_bar_stream(self, provider: DataProvider) -> None:
         """Run bar streaming for a provider."""
@@ -110,9 +139,14 @@ class DataManager:
                 if not self._running:
                     break
                 self.bars_received += 1
-                await self._bus.publish(
-                    Channel.BAR, bar.model_dump(mode="json")
-                )
+                data = bar.model_dump(mode="json")
+                if self._perf:
+                    self._perf.record_received()
+                if self._mq:
+                    data["_channel"] = str(Channel.BAR)
+                    await self._mq.enqueue(data)
+                else:
+                    await self._bus.publish(Channel.BAR, data)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -125,9 +159,14 @@ class DataManager:
                 if not self._running:
                     break
                 self.quotes_received += 1
-                await self._bus.publish(
-                    Channel.QUOTE, quote.model_dump(mode="json")
-                )
+                data = quote.model_dump(mode="json")
+                if self._perf:
+                    self._perf.record_received()
+                if self._mq:
+                    data["_channel"] = str(Channel.QUOTE)
+                    await self._mq.enqueue(data)
+                else:
+                    await self._bus.publish(Channel.QUOTE, data)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -140,9 +179,14 @@ class DataManager:
                 if not self._running:
                     break
                 self.trades_received += 1
-                await self._bus.publish(
-                    Channel.TRADE, trade.model_dump(mode="json")
-                )
+                data = trade.model_dump(mode="json")
+                if self._perf:
+                    self._perf.record_received()
+                if self._mq:
+                    data["_channel"] = str(Channel.TRADE)
+                    await self._mq.enqueue(data)
+                else:
+                    await self._bus.publish(Channel.TRADE, data)
         except asyncio.CancelledError:
             pass
         except Exception:

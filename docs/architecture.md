@@ -55,13 +55,32 @@ Every component publishes and subscribes to events on named channels. This desig
 
 ```
 DataProvider.stream_bars()  ─┐
-REST POST /api/data/bars     ├→ DataManager → publish(Channel.BAR, Bar)
-WebSocket /ws/data           ─┘                    │
-                                   ┌───────────────┤
-                                   ▼                ▼
-                           DashboardWSManager    StrategyManager
-                           (broadcast to UI)     (dispatch to strategies)
+REST POST /api/data/bars     ├→ DataManager ──→ MessageQueue (async bounded)
+WebSocket /ws/data           ─┘                       │
+REST POST /api/data/*/batch ─┘                  Consumer (batch + dedup)
+                                                      │
+                                               publish(Channel.BAR, Bar)
+                                                      │
+                                   ┌──────────────────┤
+                                   ▼                   ▼
+                           DashboardWSManager       StrategyManager
+                           (throttled broadcast)    (dispatch to strategies)
+                                   │
+                           DashboardThrottler
+                           (buffer → dedup → flush at interval)
+                                   │
+                           WebSocket clients
 ```
+
+The **MessageQueue** decouples ingestion from processing. In lossy mode it drops
+the oldest message when full; in lossless mode it applies back-pressure. The
+consumer drains the queue in configurable batches, optionally deduplicating
+quotes (keeping the latest per symbol within each batch).
+
+The **DashboardThrottler** sits between the EventBus and WebSocket clients. It
+buffers high-frequency market data (quotes, trades, bars), deduplicates by
+symbol, caps trades per flush, and sends a single batch message at a fixed
+interval (default 100 ms), reducing broadcast volume from thousands/sec to ~10/sec.
 
 ### Event Flow: Strategy → Execution
 
@@ -285,25 +304,28 @@ ScaledOrderManager.create_scaled_exit(symbol, tranches, stop_loss_price)
 1.  Load configuration (config.toml + .env)
 2.  Initialize structured logging (structlog)
 3.  Create EventBus
-4.  Create DataManager with DataConfig
-5.  Register file providers (CsvBarProvider) if configured
-6.  Start DataManager → connect and stream all registered providers
-7.  Create PublicComExecAdapter → connect() → authenticate API
-8.  Create CryptoExecAdapter → connect() (if crypto credentials set)
-9.  Create OptionsExecAdapter → connect() (if options credentials set)
-10. Create OrderRouter → register adapters by AssetClass (STOCK, CRYPTO, OPTION)
-11. Start portfolio refresh loops (equity, crypto, options)
-12. Create RiskManager with RiskConfig + GreeksRiskConfig
-13. Create GreeksProvider
-14. Create ExpirationManager → start() → begin DTE monitoring loop
-15. Create OptionsStrategyBuilder (with OptionsExecAdapter + StrategyValidator)
-16. Create BracketOrderManager → wire_events()
-17. Create TrailingStopManager → wire_events()
-18. Create ScaledOrderManager → wire_events()
-19. Create StrategyManager → wire_events() → subscribe to market data channels
-20. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
-21. Start uvicorn server
-22. Publish system ready event
+4.  Create PerformanceMetrics
+5.  Create MessageQueue (bounded, lossy/lossless) → start consumer callback
+6.  Create DataManager with DataConfig, MessageQueue, PerformanceMetrics
+7.  Register file providers (CsvBarProvider) if configured
+8.  Start DataManager → connect and stream all registered providers
+9.  Create PublicComExecAdapter → connect() → authenticate API
+10. Create CryptoExecAdapter → connect() (if crypto credentials set)
+11. Create OptionsExecAdapter → connect() (if options credentials set)
+12. Create OrderRouter → register adapters by AssetClass (STOCK, CRYPTO, OPTION)
+13. Start portfolio refresh loops (equity, crypto, options)
+14. Create RiskManager with RiskConfig + GreeksRiskConfig
+15. Create GreeksProvider
+16. Create ExpirationManager → start() → begin DTE monitoring loop
+17. Create OptionsStrategyBuilder (with OptionsExecAdapter + StrategyValidator)
+18. Create BracketOrderManager → wire_events()
+19. Create TrailingStopManager → wire_events()
+20. Create ScaledOrderManager → wire_events()
+21. Create StrategyManager → wire_events() → subscribe to market data channels
+22. Create DashboardThrottler (flush_interval_ms, max_trades_per_flush)
+23. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
+24. Start uvicorn server
+25. Publish system ready event
 ```
 
 ### Shutdown Sequence
@@ -316,10 +338,11 @@ ScaledOrderManager.create_scaled_exit(symbol, tranches, stop_loss_price)
 5.  TrailingStopManager.unwire_events()
 6.  BracketOrderManager.unwire_events()
 7.  ExpirationManager.stop() → cancel DTE monitoring loop
-8.  DashboardWSManager.stop() → close WebSocket connections
-9.  OrderRouter.disconnect() → disconnect all registered adapters
-10. DataManager.stop() → disconnect all providers, cancel streaming tasks
-11. Uvicorn server shutdown
+8.  DashboardWSManager.stop() → stop throttler, close WebSocket connections
+9.  MessageQueue.stop() → drain remaining messages, cancel consumer task
+10. OrderRouter.disconnect() → disconnect all registered adapters
+11. DataManager.stop() → disconnect all providers, cancel streaming tasks
+12. Uvicorn server shutdown
 ```
 
 ## Async Patterns
@@ -327,9 +350,11 @@ ScaledOrderManager.create_scaled_exit(symbol, tranches, stop_loss_price)
 The platform is built entirely on `asyncio`:
 
 - **Data streaming** — Long-lived tasks consuming from DataProvider async iterators
+- **Message queue** — `asyncio.Queue`-backed bounded queue with an async consumer task draining in configurable batches
 - **Event bus** — `asyncio.gather` dispatches to all subscribers concurrently
 - **Order tracking** — `asyncio.create_task` spawns a background poller for each order
 - **Portfolio refresh** — Periodic `asyncio.sleep` loop fetching portfolio state
+- **Dashboard throttling** — Async task buffers market events, flushes at a fixed interval to cap WebSocket broadcast rate
 - **Dashboard** — FastAPI with uvicorn ASGI server, WebSocket broadcast via asyncio tasks
 - **Signal handling** — `asyncio.Event` for graceful shutdown on SIGINT/SIGTERM
 
@@ -342,6 +367,8 @@ trading_platform.main
     ├── core.events (EventBus)
     ├── core.enums (Channel)
     ├── core.order_router (OrderRouter)
+    ├── core.message_queue (MessageQueue)
+    ├── core.metrics (PerformanceMetrics)
     │
     ├── data.manager (DataManager)
     │   ├── data.provider (DataProvider ABC)
@@ -384,7 +411,8 @@ trading_platform.main
     │   └── risk.models (RiskConfig, RiskState, RiskViolation)
     │
     └── dashboard.app (create_app)
-        └── dashboard.ws (DashboardWSManager)
+        ├── dashboard.ws (DashboardWSManager)
+        └── dashboard.throttler (DashboardThrottler)
 ```
 
 ## Data Flow

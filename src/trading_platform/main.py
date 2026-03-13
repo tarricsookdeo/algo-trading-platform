@@ -11,6 +11,7 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -23,10 +24,13 @@ from trading_platform.adapters.public_com.config import PublicComConfig
 from trading_platform.bracket.manager import BracketOrderManager
 from trading_platform.core.config import load_settings
 from trading_platform.core.enums import AssetClass, Channel
+from trading_platform.core.message_queue import MessageQueue
+from trading_platform.core.metrics import PerformanceMetrics
 from trading_platform.core.order_router import OrderRouter
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
 from trading_platform.dashboard.app import create_app
+from trading_platform.dashboard.throttler import DashboardThrottler
 from trading_platform.dashboard.ws import DashboardWSManager
 from trading_platform.data.config import DataConfig
 from trading_platform.data.file_provider import CsvBarProvider
@@ -45,7 +49,7 @@ BANNER = r"""
  / ___ \| | (_| | (_) | | || | | (_| | (_| | | | | | (_| |
 /_/   \_\_|\__, |\___/  |_||_|  \__,_|\__,_|_|_| |_|\__, |
            |___/                                     |___/
-           P L A T F O R M   v0.2.0
+           P L A T F O R M   v0.3.0
 """
 
 
@@ -84,6 +88,36 @@ async def run(args: argparse.Namespace) -> None:
     # ── Core ───────────────────────────────────────────────────────────
     event_bus = EventBus()
 
+    # ── Performance Metrics ────────────────────────────────────────────
+    perf_metrics = PerformanceMetrics()
+    log.info("performance metrics initialized")
+
+    # ── Message Queue ──────────────────────────────────────────────────
+    message_queue = MessageQueue(
+        max_size=settings.performance.message_queue_size,
+        mode=settings.performance.message_queue_mode,
+        dedup_quotes=settings.performance.dedup_quotes_in_batch,
+    )
+
+    async def _mq_consumer_callback(batch: list[dict[str, Any]]) -> None:
+        """Republish queued messages to the EventBus."""
+        for msg in batch:
+            channel = msg.pop("_channel", None)
+            if channel:
+                await event_bus.publish(channel, msg)
+                perf_metrics.record_processed()
+
+    message_queue.start_consumer(
+        callback=_mq_consumer_callback,
+        batch_size=settings.performance.consumer_batch_size,
+        flush_interval_ms=settings.performance.consumer_flush_interval_ms,
+    )
+    log.info(
+        "message queue started",
+        mode=settings.performance.message_queue_mode,
+        max_size=settings.performance.message_queue_size,
+    )
+
     # ── Data Manager ──────────────────────────────────────────────────
     data_config = DataConfig(
         ingestion_enabled=settings.data.ingestion_enabled,
@@ -91,7 +125,12 @@ async def run(args: argparse.Namespace) -> None:
         replay_speed=settings.data.replay_speed,
         max_bars_per_request=settings.data.max_bars_per_request,
     )
-    data_manager = DataManager(event_bus, data_config)
+    data_manager = DataManager(
+        event_bus,
+        data_config,
+        message_queue=message_queue,
+        perf_metrics=perf_metrics,
+    )
 
     # Register file providers if directories are configured
     if data_config.csv_directory:
@@ -207,6 +246,16 @@ async def run(args: argparse.Namespace) -> None:
     )
     log.info("strategy manager initialized")
 
+    # ── Dashboard Throttler ────────────────────────────────────────────
+    throttler = DashboardThrottler(
+        flush_interval_ms=settings.dashboard.update_interval_ms,
+        max_trades_per_flush=settings.dashboard.max_trades_per_flush,
+    )
+    log.info(
+        "dashboard throttler configured",
+        interval_ms=settings.dashboard.update_interval_ms,
+    )
+
     # ── Dashboard ──────────────────────────────────────────────────────
     app, ws_manager = create_app(
         event_bus,
@@ -214,6 +263,9 @@ async def run(args: argparse.Namespace) -> None:
         exec_adapter=exec_adapter,
         strategy_manager=strategy_manager,
         risk_manager=risk_manager,
+        message_queue=message_queue,
+        perf_metrics=perf_metrics,
+        throttler=throttler,
     )
 
     # ── Shutdown handling ──────────────────────────────────────────────
@@ -284,6 +336,7 @@ async def run(args: argparse.Namespace) -> None:
         await strategy_manager.unwire_events()
         await bracket_manager.unwire_events()
         await ws_manager.stop()
+        await message_queue.stop()
         if exec_adapter:
             await exec_adapter.disconnect()
         await data_manager.stop()

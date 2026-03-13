@@ -14,6 +14,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
+from trading_platform.core.message_queue import MessageQueue
+from trading_platform.core.metrics import PerformanceMetrics
+from trading_platform.dashboard.throttler import DashboardThrottler
 from trading_platform.dashboard.ws import DashboardWSManager
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -30,13 +33,16 @@ def create_app(
     scaled_order_manager: Any = None,
     greeks_provider: Any = None,
     expiration_manager: Any = None,
+    message_queue: MessageQueue | None = None,
+    perf_metrics: PerformanceMetrics | None = None,
+    throttler: DashboardThrottler | None = None,
 ) -> tuple[FastAPI, DashboardWSManager]:
     """Create and configure the FastAPI application.
 
     Returns the app and the WS manager so the platform can start/stop them.
     """
     app = FastAPI(title="Algo Trading Platform", docs_url=None, redoc_url=None)
-    ws_manager = DashboardWSManager(event_bus)
+    ws_manager = DashboardWSManager(event_bus, throttler=throttler, perf_metrics=perf_metrics)
     log = get_logger("dashboard.app")
 
     # Store references for endpoint handlers
@@ -51,6 +57,8 @@ def create_app(
     app.state.scaled_order_manager = scaled_order_manager
     app.state.greeks_provider = greeks_provider
     app.state.expiration_manager = expiration_manager
+    app.state.message_queue = message_queue
+    app.state.perf_metrics = perf_metrics
 
     # Mount data ingestion routes if data_manager is provided
     if data_manager is not None:
@@ -79,6 +87,24 @@ def create_app(
             data["data_providers"] = dm.get_provider_status()
             data["ingestion"] = dm.get_ingestion_stats()
         return JSONResponse(data)
+
+    # ── Performance Metrics ───────────────────────────────────────────
+
+    @app.get("/api/metrics")
+    async def get_metrics() -> JSONResponse:
+        result: dict[str, Any] = {}
+        pm = app.state.perf_metrics
+        if pm:
+            mq = app.state.message_queue
+            if mq:
+                pm.queue_depth = mq.depth
+            result["performance"] = pm.snapshot()
+        mq = app.state.message_queue
+        if mq:
+            result["message_queue"] = mq.get_metrics()
+        if not result:
+            result = {"performance": {}, "message_queue": {}}
+        return JSONResponse(result)
 
     # ── Portfolio & Orders ────────────────────────────────────────────
 

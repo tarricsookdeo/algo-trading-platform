@@ -21,9 +21,19 @@ class DataSettings(BaseSettings):
     max_bars_per_request: int = 10000
 
 
+class PerformanceSettings(BaseSettings):
+    message_queue_size: int = 50000
+    message_queue_mode: str = "lossy"
+    consumer_batch_size: int = 100
+    consumer_flush_interval_ms: int = 10
+    dedup_quotes_in_batch: bool = True
+
+
 class DashboardSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
+    update_interval_ms: int = 100
+    max_trades_per_flush: int = 50
 
 
 class PublicComSettings(BaseSettings):
@@ -89,6 +99,7 @@ class Settings(BaseSettings):
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     platform: PlatformSettings = Field(default_factory=PlatformSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
+    performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -120,6 +131,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     crypto_data = toml_data.get("crypto", {})
     dashboard_data = toml_data.get("dashboard", {})
     platform_data = toml_data.get("platform", {})
+    performance_data = toml_data.get("performance", {})
     risk_data = dict(toml_data.get("risk", {}))
 
     options_data = dict(toml_data.get("options", {}))
@@ -136,6 +148,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     options = OptionsSettings(**options_data, expiration=expiration_settings)
     dashboard = DashboardSettings(**dashboard_data)
     platform_cfg = PlatformSettings(**platform_data)
+    performance = PerformanceSettings(**performance_data)
     risk = RiskSettings(**risk_data, greeks=greeks_settings)
 
     return Settings(
@@ -146,4 +159,5 @@ def load_settings(config_path: Path | None = None) -> Settings:
         dashboard=dashboard,
         platform=platform_cfg,
         risk=risk,
+        performance=performance,
     )
