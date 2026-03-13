@@ -102,35 +102,44 @@ class DataManager:
     async def publish_bar(self, bar_data: dict[str, Any]) -> None:
         """Publish a bar event from ingestion."""
         self.bars_received += 1
+        symbol = bar_data.get("symbol")
         if self._perf:
             self._perf.record_received()
         if self._mq:
             bar_data["_channel"] = str(Channel.BAR)
+            if symbol:
+                bar_data["_topic"] = symbol
             await self._mq.enqueue(bar_data)
         else:
-            await self._bus.publish(Channel.BAR, bar_data)
+            await self._bus.publish(Channel.BAR, bar_data, topic=symbol)
 
     async def publish_quote(self, quote_data: dict[str, Any]) -> None:
         """Publish a quote event from ingestion."""
         self.quotes_received += 1
+        symbol = quote_data.get("symbol")
         if self._perf:
             self._perf.record_received()
         if self._mq:
             quote_data["_channel"] = str(Channel.QUOTE)
+            if symbol:
+                quote_data["_topic"] = symbol
             await self._mq.enqueue(quote_data)
         else:
-            await self._bus.publish(Channel.QUOTE, quote_data)
+            await self._bus.publish(Channel.QUOTE, quote_data, topic=symbol)
 
     async def publish_trade(self, trade_data: dict[str, Any]) -> None:
         """Publish a trade event from ingestion."""
         self.trades_received += 1
+        symbol = trade_data.get("symbol")
         if self._perf:
             self._perf.record_received()
         if self._mq:
             trade_data["_channel"] = str(Channel.TRADE)
+            if symbol:
+                trade_data["_topic"] = symbol
             await self._mq.enqueue(trade_data)
         else:
-            await self._bus.publish(Channel.TRADE, trade_data)
+            await self._bus.publish(Channel.TRADE, trade_data, topic=symbol)
 
     async def _run_bar_stream(self, provider: DataProvider) -> None:
         """Run bar streaming for a provider."""
@@ -140,13 +149,16 @@ class DataManager:
                     break
                 self.bars_received += 1
                 data = bar.model_dump(mode="json")
+                symbol = data.get("symbol")
                 if self._perf:
                     self._perf.record_received()
                 if self._mq:
                     data["_channel"] = str(Channel.BAR)
+                    if symbol:
+                        data["_topic"] = symbol
                     await self._mq.enqueue(data)
                 else:
-                    await self._bus.publish(Channel.BAR, data)
+                    await self._bus.publish(Channel.BAR, data, topic=symbol)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -160,13 +172,16 @@ class DataManager:
                     break
                 self.quotes_received += 1
                 data = quote.model_dump(mode="json")
+                symbol = data.get("symbol")
                 if self._perf:
                     self._perf.record_received()
                 if self._mq:
                     data["_channel"] = str(Channel.QUOTE)
+                    if symbol:
+                        data["_topic"] = symbol
                     await self._mq.enqueue(data)
                 else:
-                    await self._bus.publish(Channel.QUOTE, data)
+                    await self._bus.publish(Channel.QUOTE, data, topic=symbol)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -180,13 +195,16 @@ class DataManager:
                     break
                 self.trades_received += 1
                 data = trade.model_dump(mode="json")
+                symbol = data.get("symbol")
                 if self._perf:
                     self._perf.record_received()
                 if self._mq:
                     data["_channel"] = str(Channel.TRADE)
+                    if symbol:
+                        data["_topic"] = symbol
                     await self._mq.enqueue(data)
                 else:
-                    await self._bus.publish(Channel.TRADE, data)
+                    await self._bus.publish(Channel.TRADE, data, topic=symbol)
         except asyncio.CancelledError:
             pass
         except Exception:

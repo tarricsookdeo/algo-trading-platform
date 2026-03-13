@@ -97,14 +97,16 @@ async def run(args: argparse.Namespace) -> None:
         max_size=settings.performance.message_queue_size,
         mode=settings.performance.message_queue_mode,
         dedup_quotes=settings.performance.dedup_quotes_in_batch,
+        lazy_deserialize=settings.performance.lazy_deserialize,
     )
 
     async def _mq_consumer_callback(batch: list[dict[str, Any]]) -> None:
         """Republish queued messages to the EventBus."""
         for msg in batch:
             channel = msg.pop("_channel", None)
+            topic = msg.pop("_topic", None)
             if channel:
-                await event_bus.publish(channel, msg)
+                await event_bus.publish(channel, msg, topic=topic)
                 perf_metrics.record_processed()
 
     message_queue.start_consumer(

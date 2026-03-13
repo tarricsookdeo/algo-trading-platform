@@ -1,7 +1,8 @@
 """Async message queue for decoupling data ingestion from processing.
 
 Provides a bounded async queue with batched consumption, optional lossy mode
-(drop oldest when full), and intra-batch quote deduplication.
+(drop oldest when full), intra-batch quote deduplication, and optional lazy
+deserialization (store raw bytes, deserialize on consume).
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ log = get_logger("core.message_queue")
 
 BatchCallback = Callable[[list[dict[str, Any]]], Coroutine[Any, Any, None]]
 
+# Type for queue items: either a dict (eager) or a tuple of (raw_bytes, format_str) for lazy deser
+QueueItem = dict[str, Any] | tuple[bytes, str]
+
 
 class MessageQueue:
     """Async bounded message queue with batched consumption.
@@ -29,6 +33,9 @@ class MessageQueue:
         ``"lossless"`` applies backpressure (blocks the producer).
     dedup_quotes : bool
         When True, only the latest quote per symbol is kept within a batch.
+    lazy_deserialize : bool
+        When True, ``enqueue_raw()`` stores raw bytes and defers deserialization
+        to the consumer side.
     """
 
     def __init__(
@@ -36,11 +43,13 @@ class MessageQueue:
         max_size: int = 50_000,
         mode: str = "lossy",
         dedup_quotes: bool = True,
+        lazy_deserialize: bool = False,
     ) -> None:
         self._max_size = max_size
         self._mode = mode
         self._dedup_quotes = dedup_quotes
-        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_size)
+        self._lazy_deserialize = lazy_deserialize
+        self._queue: asyncio.Queue[QueueItem] = asyncio.Queue(maxsize=max_size)
         self._consumer_task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -112,6 +121,43 @@ class MessageQueue:
             self.drop_count += 1
             return False
 
+    async def enqueue_raw(self, raw: bytes, fmt: str = "json") -> bool:
+        """Enqueue raw bytes for lazy deserialization.
+
+        If ``lazy_deserialize`` is disabled, deserializes eagerly and delegates
+        to ``enqueue()``.  Returns True if enqueued, False if dropped.
+        """
+        if not self._lazy_deserialize:
+            from trading_platform.data.serialization import Format, deserialize
+            data = deserialize(raw, Format(fmt))
+            return await self.enqueue(data)
+
+        enqueue_time = time.monotonic()
+        item: QueueItem = (raw, fmt)
+
+        if self._queue.full():
+            if self._mode == "lossy":
+                try:
+                    old = self._queue.get_nowait()
+                    self._enqueue_times.pop(id(old), None)
+                    self.drop_count += 1
+                except asyncio.QueueEmpty:
+                    pass
+            else:
+                await self._queue.put(item)
+                self.enqueue_count += 1
+                self._enqueue_times[id(item)] = enqueue_time
+                return True
+
+        try:
+            self._queue.put_nowait(item)
+            self.enqueue_count += 1
+            self._enqueue_times[id(item)] = enqueue_time
+            return True
+        except asyncio.QueueFull:
+            self.drop_count += 1
+            return False
+
     def start_consumer(
         self,
         callback: BatchCallback,
@@ -155,6 +201,14 @@ class MessageQueue:
 
     # ── Internal ─────────────────────────────────────────────────────────
 
+    def _resolve_item(self, item: QueueItem) -> dict[str, Any]:
+        """Deserialize a queue item if it is raw bytes, otherwise pass through."""
+        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], bytes):
+            from trading_platform.data.serialization import Format, deserialize
+            raw, fmt_str = item
+            return deserialize(raw, Format(fmt_str))
+        return item  # type: ignore[return-value]
+
     async def _consume(
         self,
         callback: BatchCallback,
@@ -176,11 +230,11 @@ class MessageQueue:
                     if remaining <= 0:
                         break
                     try:
-                        msg = await asyncio.wait_for(
+                        item = await asyncio.wait_for(
                             self._queue.get(), timeout=remaining
                         )
-                        batch.append(msg)
-                        self._record_latency(msg)
+                        self._record_latency(item)
+                        batch.append(self._resolve_item(item))
                     except asyncio.TimeoutError:
                         break
 
@@ -193,9 +247,9 @@ class MessageQueue:
             # Drain remaining on shutdown
             while not self._queue.empty():
                 try:
-                    msg = self._queue.get_nowait()
-                    self._record_latency(msg)
-                    batch = [msg]
+                    item = self._queue.get_nowait()
+                    self._record_latency(item)
+                    batch = [self._resolve_item(item)]
                     if self._dedup_quotes:
                         batch = self._dedup_quote_batch(batch)
                     self.dequeue_count += len(batch)

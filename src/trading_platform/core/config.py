@@ -27,6 +27,8 @@ class PerformanceSettings(BaseSettings):
     consumer_batch_size: int = 100
     consumer_flush_interval_ms: int = 10
     dedup_quotes_in_batch: bool = True
+    default_serialization: str = "json"
+    lazy_deserialize: bool = False
 
 
 class DashboardSettings(BaseSettings):

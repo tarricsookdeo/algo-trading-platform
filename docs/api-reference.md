@@ -13,14 +13,17 @@ class EventBus:
     total_published: int
     channel_counts: dict[str, int]
     subscriber_count: int  # property
+    topic_filtered_count: int  # dispatches that used topic filtering
 
-    async def publish(self, channel: str | Channel, event: Any) -> None
-    async def subscribe(self, channel: str | Channel, callback: Callback) -> None
-    async def unsubscribe(self, channel: str | Channel, callback: Callback) -> None
+    async def publish(self, channel: str | Channel, event: Any, topic: str | None = None) -> None
+    async def subscribe(self, channel: str | Channel, callback: Callback, topic: str | None = None) -> None
+    async def unsubscribe(self, channel: str | Channel, callback: Callback, topic: str | None = None) -> None
     def events_per_second(self) -> float
 ```
 
 `Callback = Callable[[str, Any], Coroutine[Any, Any, None]]`
+
+**Topic-based routing:** When `topic` is provided to `subscribe`, the callback only receives events published with the same topic. Broad subscribers (no topic) always receive all events on the channel. Publishing with a topic dispatches to both topic-specific and broad subscribers.
 
 ### Models
 
@@ -267,6 +270,23 @@ class DataConfig(BaseModel):
     replay_speed: float = 0.0
     max_bars_per_request: int = 10000
 ```
+
+### Serialization
+
+`trading_platform.data.serialization`
+
+```python
+class Format(StrEnum):
+    JSON = "json"
+    MSGPACK = "msgpack"
+
+def serialize(data: Any, fmt: Format = Format.JSON) -> bytes
+def deserialize(raw: bytes, fmt: Format = Format.JSON) -> Any
+def detect_format(content_type: str | None) -> Format
+def has_msgpack() -> bool
+```
+
+`serialize` / `deserialize` encode and decode data as JSON or MessagePack. `detect_format` maps HTTP content types (`application/json`, `application/x-msgpack`) to a `Format`. `has_msgpack` returns whether the `msgpack` package is installed.
 
 ### CsvBarProvider
 
@@ -1002,6 +1022,8 @@ class Strategy(ABC):
     config: dict[str, Any]
     context: Any  # StrategyContext, injected by StrategyManager
     is_active: bool
+    evaluations_skipped: int   # ticks skipped by price change gate
+    evaluations_run: int       # ticks that passed the gate
 
     async def on_start(self) -> None
     async def on_stop(self) -> None
@@ -1011,7 +1033,12 @@ class Strategy(ABC):
     async def on_order_update(self, order_update: Any) -> None
     async def on_position_update(self, positions: list[Any]) -> None
     async def on_signal(self, signal: Any) -> None
+
+    @property
+    def skip_rate_percent(self) -> float  # evaluations_skipped / total * 100
 ```
+
+**Conditional evaluation gate:** Pass `min_price_change` and/or `min_price_change_percent` in the strategy `config` dict to skip evaluation when the price hasn't moved enough since the last evaluation. Either threshold triggering is sufficient (OR logic). First tick per symbol always evaluates. Does **not** affect bracket orders, trailing stops, or scaled orders.
 
 ### StrategyContext
 
@@ -1250,7 +1277,13 @@ def create_app(
 | `POST` | `/api/data/bars` | Ingest bar data |
 | `POST` | `/api/data/quotes` | Ingest quote data |
 | `POST` | `/api/data/trades` | Ingest trade data |
+| `POST` | `/api/data/bars/batch` | Ingest batch of bars |
+| `POST` | `/api/data/quotes/batch` | Ingest batch of quotes |
+| `POST` | `/api/data/trades/batch` | Ingest batch of trades |
+| `GET` | `/api/metrics` | Performance metrics |
 | `WS` | `/ws/data` | Stream data via WebSocket |
+
+REST ingestion endpoints accept `Content-Type: application/x-msgpack` for MessagePack-encoded bodies. WebSocket binary frames are parsed as MessagePack; text frames as JSON.
 
 ### DashboardWSManager
 
@@ -1284,6 +1317,7 @@ class Settings:
     dashboard: DashboardSettings
     platform: PlatformSettings
     risk: RiskSettings          # includes risk.greeks subsection
+    performance: PerformanceSettings
 ```
 
 ### Functions

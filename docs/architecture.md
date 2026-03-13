@@ -50,6 +50,7 @@ Every component publishes and subscribes to events on named channels. This desig
 - **Extensibility** — New subscribers can be added without modifying publishers
 - **Observability** — The dashboard subscribes to all events for real-time monitoring
 - **Testability** — Components can be tested in isolation with a mock EventBus
+- **Topic filtering** — Subscribers can optionally filter by topic (e.g., symbol) to reduce unnecessary dispatching
 
 ### Event Flow: Data Ingestion → Dashboard
 
@@ -351,7 +352,7 @@ The platform is built entirely on `asyncio`:
 
 - **Data streaming** — Long-lived tasks consuming from DataProvider async iterators
 - **Message queue** — `asyncio.Queue`-backed bounded queue with an async consumer task draining in configurable batches
-- **Event bus** — `asyncio.gather` dispatches to all subscribers concurrently
+- **Event bus** — `asyncio.gather` dispatches to all subscribers concurrently; optional topic-based routing skips non-matching subscribers
 - **Order tracking** — `asyncio.create_task` spawns a background poller for each order
 - **Portfolio refresh** — Periodic `asyncio.sleep` loop fetching portfolio state
 - **Dashboard throttling** — Async task buffers market events, flushes at a fixed interval to cap WebSocket broadcast rate
@@ -374,7 +375,8 @@ trading_platform.main
     │   ├── data.provider (DataProvider ABC)
     │   ├── data.file_provider (CsvBarProvider)
     │   ├── data.config (DataConfig)
-    │   └── data.ingestion_server (mount_ingestion_routes)
+    │   ├── data.ingestion_server (mount_ingestion_routes)
+    │   └── data.serialization (Format, serialize, deserialize)
     │
     ├── adapters.public_com.adapter (PublicComExecAdapter)
     │   ├── adapters.public_com.client (PublicComClient)

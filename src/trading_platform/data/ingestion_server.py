@@ -3,6 +3,10 @@
 These endpoints are added to the dashboard FastAPI app to accept
 external data via REST POST or WebSocket streaming.  Includes batch
 endpoints and WebSocket batch-frame support for high-throughput ingestion.
+
+Supports both JSON and MessagePack serialization:
+- REST: Content-Type header selects format (application/json or application/x-msgpack)
+- WebSocket: binary frames = msgpack, text frames = JSON
 """
 
 from __future__ import annotations
@@ -10,27 +14,55 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, Response
 
 from trading_platform.core.logging import get_logger
 from trading_platform.core.models import Bar, QuoteTick, TradeTick
 from trading_platform.data.manager import DataManager
+from trading_platform.data.serialization import (
+    Format,
+    deserialize,
+    detect_format,
+    serialize,
+)
 
 log = get_logger("data.ingestion")
+
+
+def _make_response(data: dict[str, Any], accept: str | None, status_code: int = 200) -> Response:
+    """Build a Response in the format requested by the Accept header."""
+    fmt = detect_format(accept)
+    if fmt == Format.MSGPACK:
+        return Response(
+            content=serialize(data, fmt),
+            media_type="application/x-msgpack",
+            status_code=status_code,
+        )
+    return JSONResponse(data, status_code=status_code)
+
+
+async def _parse_body(request: Request) -> Any:
+    """Parse request body based on Content-Type header."""
+    fmt = detect_format(request.headers.get("content-type"))
+    raw = await request.body()
+    return deserialize(raw, fmt)
 
 
 def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
     """Add data ingestion REST and WebSocket routes to the app."""
 
-    # ── Single / small-batch REST endpoints (existing) ─────────────────
+    # ── Single / small-batch REST endpoints ──────────────────────────────
 
     @app.post("/api/data/bars")
-    async def ingest_bars(body: dict[str, Any] | list[dict[str, Any]]) -> JSONResponse:
+    async def ingest_bars(request: Request) -> Response:
+        body = await _parse_body(request)
+        accept = request.headers.get("accept")
         items = body if isinstance(body, list) else [body]
         if len(items) > data_manager._config.max_bars_per_request:
-            return JSONResponse(
+            return _make_response(
                 {"error": f"max {data_manager._config.max_bars_per_request} bars per request"},
+                accept,
                 status_code=400,
             )
         count = 0
@@ -41,10 +73,12 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
                 count += 1
             except Exception as exc:
                 log.warning("invalid bar data", error=str(exc))
-        return JSONResponse({"ingested": count})
+        return _make_response({"ingested": count}, accept)
 
     @app.post("/api/data/quotes")
-    async def ingest_quotes(body: dict[str, Any] | list[dict[str, Any]]) -> JSONResponse:
+    async def ingest_quotes(request: Request) -> Response:
+        body = await _parse_body(request)
+        accept = request.headers.get("accept")
         items = body if isinstance(body, list) else [body]
         count = 0
         for item in items:
@@ -54,10 +88,12 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
                 count += 1
             except Exception as exc:
                 log.warning("invalid quote data", error=str(exc))
-        return JSONResponse({"ingested": count})
+        return _make_response({"ingested": count}, accept)
 
     @app.post("/api/data/trades")
-    async def ingest_trades(body: dict[str, Any] | list[dict[str, Any]]) -> JSONResponse:
+    async def ingest_trades(request: Request) -> Response:
+        body = await _parse_body(request)
+        accept = request.headers.get("accept")
         items = body if isinstance(body, list) else [body]
         count = 0
         for item in items:
@@ -67,15 +103,20 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
                 count += 1
             except Exception as exc:
                 log.warning("invalid trade data", error=str(exc))
-        return JSONResponse({"ingested": count})
+        return _make_response({"ingested": count}, accept)
 
-    # ── Batch REST endpoints ───────────────────────────────────────────
+    # ── Batch REST endpoints ─────────────────────────────────────────────
 
     @app.post("/api/data/bars/batch")
-    async def ingest_bars_batch(body: list[dict[str, Any]]) -> JSONResponse:
+    async def ingest_bars_batch(request: Request) -> Response:
+        body = await _parse_body(request)
+        accept = request.headers.get("accept")
+        if not isinstance(body, list):
+            return _make_response({"error": "expected a list"}, accept, status_code=400)
         if len(body) > data_manager._config.max_bars_per_request:
-            return JSONResponse(
+            return _make_response(
                 {"error": f"max {data_manager._config.max_bars_per_request} bars per request"},
+                accept,
                 status_code=400,
             )
         count = 0
@@ -88,10 +129,14 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
             except Exception as exc:
                 errors += 1
                 log.warning("invalid bar data in batch", error=str(exc))
-        return JSONResponse({"ingested": count, "errors": errors})
+        return _make_response({"ingested": count, "errors": errors}, accept)
 
     @app.post("/api/data/quotes/batch")
-    async def ingest_quotes_batch(body: list[dict[str, Any]]) -> JSONResponse:
+    async def ingest_quotes_batch(request: Request) -> Response:
+        body = await _parse_body(request)
+        accept = request.headers.get("accept")
+        if not isinstance(body, list):
+            return _make_response({"error": "expected a list"}, accept, status_code=400)
         count = 0
         errors = 0
         for item in body:
@@ -102,10 +147,14 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
             except Exception as exc:
                 errors += 1
                 log.warning("invalid quote data in batch", error=str(exc))
-        return JSONResponse({"ingested": count, "errors": errors})
+        return _make_response({"ingested": count, "errors": errors}, accept)
 
     @app.post("/api/data/trades/batch")
-    async def ingest_trades_batch(body: list[dict[str, Any]]) -> JSONResponse:
+    async def ingest_trades_batch(request: Request) -> Response:
+        body = await _parse_body(request)
+        accept = request.headers.get("accept")
+        if not isinstance(body, list):
+            return _make_response({"error": "expected a list"}, accept, status_code=400)
         count = 0
         errors = 0
         for item in body:
@@ -116,9 +165,9 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
             except Exception as exc:
                 errors += 1
                 log.warning("invalid trade data in batch", error=str(exc))
-        return JSONResponse({"ingested": count, "errors": errors})
+        return _make_response({"ingested": count, "errors": errors}, accept)
 
-    # ── Status endpoints ───────────────────────────────────────────────
+    # ── Status endpoints ─────────────────────────────────────────────────
 
     @app.get("/api/data/status")
     async def data_status() -> JSONResponse:
@@ -128,35 +177,60 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
     async def data_providers() -> JSONResponse:
         return JSONResponse({"providers": data_manager.get_provider_status()})
 
-    # ── WebSocket ingestion (supports single + batch frames) ───────────
+    # ── WebSocket ingestion (supports single + batch frames) ─────────────
+    # Text frames → JSON, Binary frames → MessagePack
 
     @app.websocket("/ws/data")
     async def ws_data_ingest(ws: WebSocket) -> None:
         await ws.accept()
         try:
             while True:
-                raw = await ws.receive_text()
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    await ws.send_json({"error": "invalid JSON"})
+                ws_msg = await ws.receive()
+
+                # Determine format from frame type
+                if "bytes" in ws_msg and ws_msg["bytes"]:
+                    # Binary frame → msgpack
+                    try:
+                        msg = deserialize(ws_msg["bytes"], Format.MSGPACK)
+                    except Exception:
+                        await ws.send_json({"error": "invalid msgpack"})
+                        continue
+                    response_fmt = Format.MSGPACK
+                elif "text" in ws_msg and ws_msg["text"]:
+                    # Text frame → JSON
+                    try:
+                        msg = json.loads(ws_msg["text"])
+                    except json.JSONDecodeError:
+                        await ws.send_json({"error": "invalid JSON"})
+                        continue
+                    response_fmt = Format.JSON
+                else:
                     continue
 
-                # Batch frame: JSON array of messages
+                # Batch frame: array of messages
                 if isinstance(msg, list):
                     results = []
                     for item in msg:
                         result = await _process_ws_message(item, data_manager)
                         results.append(result)
-                    await ws.send_json({"status": "ok", "batch": True, "results": results})
+                    resp = {"status": "ok", "batch": True, "results": results}
+                    if response_fmt == Format.MSGPACK:
+                        await ws.send_bytes(serialize(resp, Format.MSGPACK))
+                    else:
+                        await ws.send_json(resp)
                     continue
 
                 # Single message
                 result = await _process_ws_message(msg, data_manager)
                 if "error" in result:
-                    await ws.send_json(result)
+                    resp = result
                 else:
-                    await ws.send_json({"status": "ok", "type": result.get("type", "")})
+                    resp = {"status": "ok", "type": result.get("type", "")}
+
+                if response_fmt == Format.MSGPACK:
+                    await ws.send_bytes(serialize(resp, Format.MSGPACK))
+                else:
+                    await ws.send_json(resp)
         except WebSocketDisconnect:
             pass
         except Exception:

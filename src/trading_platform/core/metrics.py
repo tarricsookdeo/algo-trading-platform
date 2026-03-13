@@ -24,6 +24,7 @@ class PerformanceMetrics:
         self.messages_processed: int = 0
         self.queue_drops: int = 0
         self.dashboard_broadcasts: int = 0
+        self.evaluations_skipped: int = 0
 
         # Rate tracking (list of (monotonic_time, count) tuples)
         self._received_ticks: list[tuple[float, int]] = []
@@ -61,6 +62,10 @@ class PerformanceMetrics:
     def record_drop(self, count: int = 1) -> None:
         """Record dropped messages."""
         self.queue_drops += count
+
+    def record_evaluation_skipped(self, count: int = 1) -> None:
+        """Record strategy evaluations skipped due to price change gate."""
+        self.evaluations_skipped += count
 
     # ── Rate helpers ─────────────────────────────────────────────────────
 
@@ -117,4 +122,5 @@ class PerformanceMetrics:
             "max_latency_ms": round(self.max_latency_ms, 3),
             "dashboard_broadcasts": self.dashboard_broadcasts,
             "dashboard_broadcast_rate": round(self.broadcast_rate, 1),
+            "evaluations_skipped": self.evaluations_skipped,
         }

@@ -127,6 +127,94 @@ Returns a JSON object with all performance metrics plus message queue stats (dep
 
 The dashboard UI displays live performance metrics including messages per second, total messages, memory usage, and connected clients. The metrics panel updates every 2 seconds via WebSocket.
 
+## Phase 1b: Hot Path Optimizations
+
+### Topic-Based EventBus Routing
+
+The EventBus supports optional **topic-based subscriptions** to reduce unnecessary dispatching. Instead of delivering every event to every subscriber on a channel, subscribers can register for a specific topic (e.g., a symbol) and only receive matching events.
+
+```python
+# Broad subscription (receives all quotes — existing behavior)
+await event_bus.subscribe("quote", on_any_quote)
+
+# Topic-specific subscription (receives only AAPL quotes)
+await event_bus.subscribe("quote", on_aapl_quote, topic="AAPL")
+
+# Publishing with a topic reaches both topic-specific AND broad subscribers
+await event_bus.publish("quote", quote_data, topic="AAPL")
+```
+
+This is fully backward compatible — existing code that doesn't use topics works unchanged. The `topic_filtered_count` metric tracks how many dispatches used topic filtering.
+
+### Binary Serialization (MessagePack)
+
+MessagePack is supported as an alternative to JSON for ingestion endpoints. MessagePack is a compact binary format that is faster to encode/decode and smaller on the wire.
+
+**REST endpoints:**
+- Send `Content-Type: application/x-msgpack` to submit MessagePack-encoded data
+- Set `Accept: application/x-msgpack` to receive MessagePack responses
+- JSON remains the default
+
+**WebSocket ingestion (`/ws/data`):**
+- Binary frames are parsed as MessagePack
+- Text frames are parsed as JSON (existing behavior)
+
+**Serialization module** (`trading_platform.data.serialization`):
+
+```python
+from trading_platform.data.serialization import Format, serialize, deserialize, detect_format
+
+data = {"symbol": "AAPL", "price": 150.0}
+packed = serialize(data, Format.MSGPACK)   # compact binary bytes
+result = deserialize(packed, Format.MSGPACK)  # back to dict
+
+fmt = detect_format("application/x-msgpack")  # Format.MSGPACK
+fmt = detect_format("application/json")        # Format.JSON
+```
+
+### Lazy Deserialization
+
+When `lazy_deserialize = true`, the MessageQueue stores raw bytes from `enqueue_raw()` and defers deserialization to the consumer. This moves parsing off the ingestion hot path entirely.
+
+```toml
+[performance]
+default_serialization = "json"   # or "msgpack"
+lazy_deserialize = true          # defer deserialization to consumer
+```
+
+### Connection Pooling
+
+All API adapter clients (Public.com, Crypto, Options) use persistent HTTP connection pools via `httpx.AsyncClient` with configured limits:
+
+- **max_connections = 20** — total concurrent connections per client
+- **max_keepalive_connections = 10** — reusable keep-alive connections
+- **timeout = 10s** — per-request timeout
+
+This eliminates TCP + TLS handshake latency (~50–100ms) on repeated API calls by reusing existing connections. The pool is created at `connect()` and properly closed at `disconnect()`.
+
+### Conditional Strategy Evaluation
+
+A price-change gate on the Strategy base class skips evaluation when price hasn't moved enough since the last evaluation. This avoids running full strategy logic on trivial ticks.
+
+```python
+class MyStrategy(Strategy):
+    def __init__(self, event_bus):
+        super().__init__("my_strategy", event_bus, config={
+            "min_price_change": "0.50",          # skip if price moved < $0.50
+            "min_price_change_percent": "0.005",  # or < 0.5%
+        })
+```
+
+- Either threshold triggering is sufficient (OR logic)
+- Default is 0 for both (no gate — evaluate every tick)
+- First tick for a symbol always evaluates
+- Per-symbol tracking: AAPL gate is independent of MSFT gate
+- **Does NOT affect** bracket orders, trailing stops, or scaled orders — they monitor price independently
+
+**Metrics:**
+- `evaluations_skipped` / `evaluations_run` per strategy
+- `skip_rate_percent` property on each strategy
+
 ## Monitoring and Troubleshooting
 
 ### High Queue Depth

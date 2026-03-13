@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -139,38 +140,56 @@ class StrategyManager:
         if not isinstance(event, QuoteTick) and not (isinstance(event, dict) and "symbol" in event):
             return
         quote = event if isinstance(event, QuoteTick) else QuoteTick(**event)
+        price = Decimal(str(quote.bid_price)) if quote.bid_price else Decimal(str(quote.ask_price or 0))
         for entry in self._strategies.values():
             if entry.state == StrategyState.ACTIVE:
                 entry.context.update_quote(quote)
+                strategy = entry.strategy
+                if not strategy._should_evaluate(quote.symbol, price):
+                    strategy.evaluations_skipped += 1
+                    continue
+                strategy._record_evaluation(quote.symbol, price)
                 try:
-                    await entry.strategy.on_quote(quote)
+                    await strategy.on_quote(quote)
                 except Exception as exc:
-                    self._log.warning("strategy on_quote error", strategy=entry.strategy.name, error=str(exc))
+                    self._log.warning("strategy on_quote error", strategy=strategy.name, error=str(exc))
 
     async def dispatch_trade(self, channel: str, event: Any) -> None:
         """EventBus callback for trade events."""
         if not isinstance(event, TradeTick) and not (isinstance(event, dict) and "symbol" in event):
             return
         trade = event if isinstance(event, TradeTick) else TradeTick(**event)
+        price = Decimal(str(trade.price))
         for entry in self._strategies.values():
             if entry.state == StrategyState.ACTIVE:
+                strategy = entry.strategy
+                if not strategy._should_evaluate(trade.symbol, price):
+                    strategy.evaluations_skipped += 1
+                    continue
+                strategy._record_evaluation(trade.symbol, price)
                 try:
-                    await entry.strategy.on_trade(trade)
+                    await strategy.on_trade(trade)
                 except Exception as exc:
-                    self._log.warning("strategy on_trade error", strategy=entry.strategy.name, error=str(exc))
+                    self._log.warning("strategy on_trade error", strategy=strategy.name, error=str(exc))
 
     async def dispatch_bar(self, channel: str, event: Any) -> None:
         """EventBus callback for bar events."""
         if not isinstance(event, Bar) and not (isinstance(event, dict) and "symbol" in event):
             return
         bar = event if isinstance(event, Bar) else Bar(**event)
+        price = Decimal(str(bar.close))
         for entry in self._strategies.values():
             if entry.state == StrategyState.ACTIVE:
                 entry.context.update_bar(bar)
+                strategy = entry.strategy
+                if not strategy._should_evaluate(bar.symbol, price):
+                    strategy.evaluations_skipped += 1
+                    continue
+                strategy._record_evaluation(bar.symbol, price)
                 try:
-                    await entry.strategy.on_bar(bar)
+                    await strategy.on_bar(bar)
                 except Exception as exc:
-                    self._log.warning("strategy on_bar error", strategy=entry.strategy.name, error=str(exc))
+                    self._log.warning("strategy on_bar error", strategy=strategy.name, error=str(exc))
 
     async def dispatch_order_update(self, channel: str, event: Any) -> None:
         """EventBus callback for order update events."""

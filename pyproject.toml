@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "publicdotcom-py>=0.1",
+    "msgpack>=1.0",
 ]
 
 [project.optional-dependencies]

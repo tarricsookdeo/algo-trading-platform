@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+import httpx
 from public_api_sdk import AsyncPublicApiClient, AsyncPublicApiClientConfiguration
 from public_api_sdk.auth_config import ApiKeyAuthConfig
 from public_api_sdk.models import (
@@ -18,6 +19,10 @@ from public_api_sdk.models import (
 
 from trading_platform.adapters.public_com.config import PublicComConfig
 from trading_platform.core.logging import get_logger
+
+# Shared connection pool limits for Public.com API
+_POOL_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+_TIMEOUT = httpx.Timeout(10.0)
 
 
 class PublicComClient:
@@ -37,8 +42,15 @@ class PublicComClient:
             default_account_number=self._config.account_id,
         )
         self._client = AsyncPublicApiClient(auth_config=auth_config, config=config)
+        # Replace the SDK's default httpx client with a pool-configured one
+        old_client = self._client.api_client._client
+        self._client.api_client._client = httpx.AsyncClient(
+            headers=dict(old_client.headers),
+            limits=_POOL_LIMITS,
+            timeout=_TIMEOUT,
+        )
         await self._client.__aenter__()
-        self._log.info("public.com client connected")
+        self._log.info("public.com client connected", pool_max=20, keepalive=10)
 
     async def disconnect(self) -> None:
         if self._client:

@@ -2,6 +2,9 @@
 
 All platform components communicate through this bus. Channels are defined
 in enums.Channel. Subscribing to "*" receives all events.
+
+Supports optional **topic-based routing**: subscribers can filter on a topic
+(e.g. a symbol) so they only receive events whose ``topic`` matches.
 """
 
 from __future__ import annotations
@@ -19,24 +22,43 @@ Callback = Callable[[str, Any], Coroutine[Any, Any, None]]
 class EventBus:
     """Async publish/subscribe event bus.
 
-    Supports named channels and wildcard subscriptions. Tracks basic
-    throughput metrics.
+    Supports named channels, wildcard subscriptions, and optional topic-based
+    filtering.  Tracks basic throughput metrics.
+
+    Topic routing
+    -------------
+    ``subscribe("quote", handler, topic="AAPL")`` registers *handler* to
+    receive only quote events published with ``topic="AAPL"``.  A subscriber
+    with ``topic=None`` (the default) receives **all** events on that channel,
+    regardless of the topic they were published with.
     """
 
     def __init__(self) -> None:
-        self._subscribers: dict[str, list[Callback]] = defaultdict(list)
+        # channel → topic (None = broad) → list of callbacks
+        self._subscribers: dict[str, dict[str | None, list[Callback]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
         self._lock = asyncio.Lock()
 
         # Metrics
         self.total_published: int = 0
         self.channel_counts: dict[str, int] = defaultdict(int)
         self._second_counts: list[tuple[float, int]] = []
+        self.topic_filtered_count: int = 0  # events dispatched via topic routing
 
-    async def publish(self, channel: str | Channel, event: Any) -> None:
-        """Publish an event to a channel.
+    async def publish(
+        self,
+        channel: str | Channel,
+        event: Any,
+        *,
+        topic: str | None = None,
+    ) -> None:
+        """Publish an event to a channel, optionally with a topic.
 
-        All subscribers on the channel and wildcard subscribers are called
-        concurrently via asyncio.gather.
+        Dispatches to:
+        1. Topic-specific subscribers (if *topic* is given).
+        2. Broad subscribers (subscribed with ``topic=None``).
+        3. Wildcard (``"*"``) subscribers.
         """
         ch = str(channel)
         self.total_published += 1
@@ -45,9 +67,20 @@ class EventBus:
 
         callbacks: list[Callback] = []
         async with self._lock:
-            callbacks.extend(self._subscribers.get(ch, []))
+            ch_map = self._subscribers.get(ch)
+            if ch_map:
+                # Broad (topic=None) subscribers always receive events
+                callbacks.extend(ch_map.get(None, []))
+                # Topic-specific subscribers receive only matching events
+                if topic is not None:
+                    topic_cbs = ch_map.get(topic, [])
+                    if topic_cbs:
+                        callbacks.extend(topic_cbs)
+                        self.topic_filtered_count += len(topic_cbs)
             if ch != "*":
-                callbacks.extend(self._subscribers.get("*", []))
+                wildcard_map = self._subscribers.get("*")
+                if wildcard_map:
+                    callbacks.extend(wildcard_map.get(None, []))
 
         if callbacks:
             await asyncio.gather(
@@ -55,21 +88,42 @@ class EventBus:
                 return_exceptions=True,
             )
 
-    async def subscribe(self, channel: str | Channel, callback: Callback) -> None:
-        """Subscribe a callback to a channel. Use '*' for all events."""
-        ch = str(channel)
-        async with self._lock:
-            if callback not in self._subscribers[ch]:
-                self._subscribers[ch].append(callback)
+    async def subscribe(
+        self,
+        channel: str | Channel,
+        callback: Callback,
+        *,
+        topic: str | None = None,
+    ) -> None:
+        """Subscribe a callback to a channel.
 
-    async def unsubscribe(self, channel: str | Channel, callback: Callback) -> None:
-        """Remove a callback from a channel."""
+        Use ``topic`` to receive only events published with that topic.
+        Use ``'*'`` as channel for all events.
+        """
         ch = str(channel)
         async with self._lock:
-            try:
-                self._subscribers[ch].remove(callback)
-            except ValueError:
-                pass
+            subs = self._subscribers[ch][topic]
+            if callback not in subs:
+                subs.append(callback)
+
+    async def unsubscribe(
+        self,
+        channel: str | Channel,
+        callback: Callback,
+        *,
+        topic: str | None = None,
+    ) -> None:
+        """Remove a callback from a channel (and optional topic)."""
+        ch = str(channel)
+        async with self._lock:
+            ch_map = self._subscribers.get(ch)
+            if ch_map:
+                subs = ch_map.get(topic)
+                if subs:
+                    try:
+                        subs.remove(callback)
+                    except ValueError:
+                        pass
 
     def events_per_second(self) -> float:
         """Return the rolling events-per-second rate over the last 5 seconds."""
@@ -86,4 +140,8 @@ class EventBus:
     @property
     def subscriber_count(self) -> int:
         """Total number of active subscriptions."""
-        return sum(len(subs) for subs in self._subscribers.values())
+        return sum(
+            len(cbs)
+            for topic_map in self._subscribers.values()
+            for cbs in topic_map.values()
+        )

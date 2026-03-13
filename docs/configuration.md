@@ -100,6 +100,8 @@ The platform starts in **data-only mode** if no execution credentials are set. D
 | `consumer_batch_size` | int | `100` | Max messages consumed per batch |
 | `consumer_flush_interval_ms` | int | `10` | Max wait time before flushing an incomplete batch (ms) |
 | `dedup_quotes_in_batch` | bool | `true` | Deduplicate quotes per symbol within each batch (keeps latest) |
+| `default_serialization` | string | `"json"` | Default serialization format: `"json"` or `"msgpack"` |
+| `lazy_deserialize` | bool | `false` | Defer deserialization to consumer (stores raw bytes in queue) |
 
 ### `[dashboard]` — Dashboard Settings
 
@@ -260,6 +262,8 @@ message_queue_mode = "lossy"
 consumer_batch_size = 200
 consumer_flush_interval_ms = 5
 dedup_quotes_in_batch = true
+default_serialization = "msgpack"   # Use MessagePack for compact binary encoding
+lazy_deserialize = true             # Defer deserialization to consumer
 
 [dashboard]
 host = "0.0.0.0"
