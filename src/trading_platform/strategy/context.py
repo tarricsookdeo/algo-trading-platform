@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING, Any
 from trading_platform.core.enums import OrderType
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
-from trading_platform.core.models import Bar, Order, Position, QuoteTick
+from trading_platform.core.models import Bar, MultiLegOrder, Order, Position, QuoteTick
 
 if TYPE_CHECKING:
     from trading_platform.bracket.manager import BracketOrderManager
     from trading_platform.bracket.models import BracketOrder
+    from trading_platform.options.strategy_builder import OptionsStrategyBuilder
 
 
 class StrategyContext:
@@ -29,12 +30,14 @@ class StrategyContext:
         exec_adapter: Any = None,
         risk_manager: Any = None,
         bracket_manager: "BracketOrderManager | None" = None,
+        options_strategy_builder: "OptionsStrategyBuilder | None" = None,
     ) -> None:
         self.strategy_id = strategy_id
         self._bus = event_bus
         self._exec = exec_adapter
         self._risk = risk_manager
         self._bracket = bracket_manager
+        self._options_builder = options_strategy_builder
         self._log = get_logger(f"strategy.context.{strategy_id}")
         self._latest_quotes: dict[str, QuoteTick] = {}
         self._latest_bars: dict[str, Bar] = {}
@@ -112,3 +115,18 @@ class StrategyContext:
         if not self._bracket:
             return False
         return await self._bracket.cancel_bracket(bracket_id)
+
+    @property
+    def options_strategy_builder(self) -> "OptionsStrategyBuilder | None":
+        """Access the OptionsStrategyBuilder for constructing multi-leg options strategies."""
+        return self._options_builder
+
+    async def submit_options_strategy(self, strategy_params: Any) -> MultiLegOrder | None:
+        """Build, validate, and submit an options strategy in one call."""
+        if not self._options_builder:
+            self._log.warning("no options strategy builder configured")
+            return None
+        if not self._exec:
+            self._log.warning("no exec adapter configured")
+            return None
+        return await self._options_builder.build_and_submit(strategy_params, self._exec)
