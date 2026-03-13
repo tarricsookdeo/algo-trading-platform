@@ -5,47 +5,41 @@
 The algo trading platform is a production-oriented, event-driven system built in Python. All components communicate through a central async event bus — there is no direct coupling between data ingestion, strategy logic, risk management, execution, or the monitoring dashboard.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│                             Dashboard (FastAPI + WebSocket)                                    │
-│   REST API: /api/status, /api/portfolio, /api/orders, /api/strategies                         │
-│   WebSocket: /ws (quotes, trades, bars, metrics, portfolio, risk)                             │
-│   Data Ingestion: POST /api/data/bars, /quotes, /trades; WS /ws/data                         │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                        Event Bus                                              │
-│  Market: quote │ trade │ bar │ status       Strategy: signal │ lifecycle                      │
-│  Exec: order.submitted │ .filled │ ...     Risk: check.* │ alert │ halt │ greeks.*           │
-│  Bracket: bracket.entry.filled │ .stopped_out │ .take_profit.* │ ...                         │
-│  Trailing: trailing_stop.placed │ .updated │ .completed │ .canceled                          │
-│  Scaled: scaled.exit.placed │ .tranche_filled │ scaled.entry.placed │ ...                    │
-│  Options: options.expiration.warning │ .position.auto_closed │ .position.rolled               │
-│  System: system │ error                    Portfolio: portfolio │ account                      │
-├────────────┬──────────────────────────────┬───────────────┬───────────────┬───────────────────┤
-│ DataManager│        Order Router          │ Bracket Mgr   │ Strategy Mgr  │  Risk Manager     │
-│ (BYOD)     │  ┌────────────────────────┐  │               │               │                   │
-│            │  │ Routes by asset_class  │  │ Entry→SL→TP   │ ┌───────────┐ │  Pre-trade:       │
-│┌──────────┐│  ├────────────────────────┤  │ SL rests live │ │ Strategy  │ │  6 checks         │
-││ CSV/Parq ││  │ Equity Adapter         │  │ TP bid watch  │ │ ┌───────┐│ │  + Greeks checks  │
-││ Providers││  │ (PublicComExecAdapter)  │  │               │ │ │Context││ │                   │
-│├──────────┤│  ├────────────────────────┤  │ State machine:│ │ └───────┘│ │  Post-trade:      │
-││ REST     ││  │ Crypto Adapter         │  │ PENDING →     │ │ on_bar() │ │  2 checks         │
-││ Ingestion││  │ (CryptoExecAdapter)    │  │ MONITORING →  │ │ on_quote│ │                   │
-│├──────────┤│  ├────────────────────────┤  │ STOPPED_OUT / │ └───────────┘ │  Halt/resume      │
-││ WebSocket││  │ Options Adapter        │  │ TP_FILLED     │               │                   │
-││ Ingestion││  │ (OptionsExecAdapter)   │  │               │               │                   │
-│├──────────┤│  └────────────────────────┘  ├───────────────┤               │                   │
-││ Custom   ││                              │ Trailing Stop │               │                   │
-││ Providers││                              │ Manager       │               │                   │
-│└──────────┘│                              ├───────────────┤               │                   │
-│            │                              │ Scaled Order  │               │                   │
-│            │                              │ Manager       │               │                   │
-├────────────┴──────────────────────────────┴───────────────┴───────────────┴───────────────────┤
-│                                    Options Layer                                              │
-│  OptionsStrategyBuilder │ StrategyValidator │ GreeksProvider │ ExpirationManager              │
-├──────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                    Core Domain                                                │
-│  Models: QuoteTick, TradeTick, Bar, Order, MultiLegOrder, Position, Fill, Instrument         │
-│  Config (Pydantic Settings) │ Logging (structlog) │ Clock │ Enums                            │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        Dashboard (FastAPI + WebSocket)                         │
+│  REST: /api/status, /portfolio, /orders, /strategies, /risk, /pnl             │
+│        /trailing-stops, /scaled-orders, /brackets, /options/greeks/*          │
+│  WebSocket: /ws (quotes, trades, bars, metrics, portfolio, risk)              │
+│  Ingestion: POST /api/data/bars, /quotes, /trades; WS /ws/data               │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                               Event Bus                                       │
+│  Market: quote │ trade │ bar │ status       Strategy: signal │ lifecycle      │
+│  Exec: execution.order.* │ .portfolio.*    Risk: check.* │ alert │ halt      │
+│  Bracket: bracket.*   Trailing: trailing_stop.*   Scaled: scaled.*           │
+│  Options: options.*   System: system │ error   Portfolio: portfolio │ account │
+├─────────────┬───────────────────┬──────────────────┬─────────────────────────┤
+│ DataManager │  OrderRouter      │  Order Managers   │  Strategy & Risk        │
+│ (BYOD)      │  (ExecAdapter)    │                   │                         │
+│             │                   │  BracketManager   │  StrategyManager        │
+│ CSV/Parquet │  ┌─────────────┐  │  TrailingStopMgr  │  ┌───────────────────┐ │
+│ REST Ingest │  │ Public.com  │  │  ScaledOrderMgr   │  │ Strategy (ABC)    │ │
+│ WS Ingest   │  │ (Equity +   │  │                   │  │ ← StrategyContext │ │
+│ Custom      │  │  Options)   │  │                   │  └───────────────────┘ │
+│             │  ├─────────────┤  │                   │                         │
+│             │  │ Crypto      │  │                   │  RiskManager            │
+│             │  │ (24/7)      │  │                   │  Pre: 6 checks          │
+│             │  ├─────────────┤  │                   │  Greeks: delta/gamma/   │
+│             │  │ Options     │  │                   │    theta/vega limits    │
+│             │  │ (multi-leg) │  │                   │  Post: drawdown, count  │
+│             │  └─────────────┘  │                   │                         │
+├─────────────┴───────────────────┴──────────────┬────┴─────────────────────────┤
+│  Options Components                             │  Core Domain                 │
+│  GreeksProvider (cache + aggregation)           │  Models: Order, Position,    │
+│  OptionsStrategyBuilder + StrategyValidator     │    QuoteTick, Bar, Fill,     │
+│  ExpirationManager (auto-close, alerts, roll)   │    MultiLegOrder, Instrument │
+│                                                 │  Config │ Logging │ Clock    │
+│                                                 │  Enums │ OrderRouter         │
+└─────────────────────────────────────────────────┴────────────────────────────┘
 ```
 
 ## Event-Driven Design
@@ -138,170 +132,192 @@ BracketOrderManager.submit_bracket_order()
     └── All state changes → publish("bracket.state_change")
 ```
 
-### Event Flow: Trailing Stop Lifecycle
+### Event Flow: Crypto Execution
 
 ```
-TrailingStopManager.create_trailing_stop(symbol, qty, price, trail_amount/trail_percent)
+StrategyContext.submit_order(order)  [order.asset_class == CRYPTO]
     │
     ▼
-Place initial stop order via ExecAdapter
+OrderRouter.submit_order()
     │
-    ├── publish("trailing_stop.placed", {trailing_stop_id, symbol, stop_price})
-    │
-    ▼
-Monitor "quote" events for symbol
-    │
-    ├── price moves up → ratchet stop price higher
-    │       │
-    │       ├── cancel_and_replace stop order with new stop price
-    │       └── publish("trailing_stop.updated", {trailing_stop_id, new_stop_price, highest_price})
-    │
-    ├── "execution.order.filled" (stop triggered)
-    │       │
-    │       └── publish("trailing_stop.completed", {trailing_stop_id, exit_fill_price})
-    │
-    └── cancel_trailing_stop(ts_id)
-            │
-            └── publish("trailing_stop.canceled", {trailing_stop_id})
-```
-
-**Channels:** `trailing_stop.placed`, `trailing_stop.updated`, `trailing_stop.completed`, `trailing_stop.canceled`
-
-### Event Flow: Scaled Order Lifecycle
-
-```
-ScaledOrderManager.create_scaled_exit(symbol, qty, take_profit_levels, stop_loss_price)
+    ├── Dispatch to CryptoExecAdapter
     │
     ▼
-Place limit sell orders for each exit tranche
+CryptoExecAdapter.submit_order(order)
     │
-    ├── publish("scaled.exit.placed", {scaled_id, symbol, tranches})
-    │
-    ▼
-Monitor "execution.order.filled" for tranche fills
-    │
-    ├── Tranche filled → adjust stop-loss for remaining quantity
-    │       │
-    │       └── publish("scaled.exit.tranche_filled", {scaled_id, tranche_price, remaining_qty})
-    │
-    └── All tranches filled or stopped out
-            │
-            └── publish("scaled.exit.completed", {scaled_id, total_filled})
-
-
-ScaledOrderManager.create_scaled_entry(symbol, qty, entry_levels, stop_loss_price)
-    │
-    ▼
-Place limit buy orders for each entry tranche
-    │
-    ├── publish("scaled.entry.placed", {scaled_id, symbol, tranches})
-    │
-    ▼
-Monitor "execution.order.filled" for tranche fills
-    │
-    └── Tranche filled
-            │
-            └── publish("scaled.entry.tranche_filled", {scaled_id, tranche_price, filled_qty})
-```
-
-**Channels:** `scaled.exit.placed`, `scaled.exit.tranche_filled`, `scaled.exit.completed`, `scaled.entry.placed`, `scaled.entry.tranche_filled`
-
-### Event Flow: Options Strategy Flow
-
-```
-OptionsStrategyBuilder.build_vertical_spread(params) / build_iron_condor(params) / ...
-    │
-    ▼
-StrategyValidator.validate_*(params)
-    │
-    ├── PASS → StrategyAnalysis(is_valid=True, ...)
-    └── FAIL → StrategyAnalysis(is_valid=False, warnings=[...])
-    │
-    ▼
-OptionsStrategyBuilder builds MultiLegOrder
-    │
-    ▼
-OrderRouter.submit_multileg_order(multileg)
-    │
-    ├── Routes to OptionsExecAdapter (asset_class=OPTION)
-    │
-    ▼
-OptionsExecAdapter.submit_multileg_order(multileg)
-    │
+    ├── Build SDK order (Decimal quantities)
     ├── publish("execution.order.submitted")
-    └── Track order status → publish fill/cancel/reject events
-```
-
-### Event Flow: Expiration Management Flow
-
-```
-ExpirationManager.start()
     │
     ▼
-Periodic check loop (every check_interval_seconds)
+_track_order() (async polling)
     │
-    ▼
-ExpirationManager.check_expirations(today)
+    ├── publish("execution.order.filled")
+    └── publish("execution.order.cancelled")
+
+CryptoExecAdapter._portfolio_refresh_loop()  [runs every portfolio_refresh seconds]
     │
-    ├── For each options position:
-    │       │
-    │       ├── DTE <= alert_dte (e.g. 7 days)
-    │       │       └── publish("options.expiration.warning", {symbol, dte, expiration_date})
-    │       │
-    │       ├── DTE <= auto_close_dte (e.g. 1 day)
-    │       │       ├── Close position via ExecAdapter
-    │       │       └── publish("options.position.auto_closed", {symbol, quantity})
-    │       │
-    │       └── roll_enabled and DTE <= auto_close_dte
-    │               ├── Build roll via OptionsStrategyBuilder
-    │               └── publish("options.position.rolled", {symbol, new_expiration})
+    ├── sync_portfolio() → fetch positions + buying power
+    ├── publish("execution.portfolio.update")
+    └── publish("execution.account.update")
 ```
 
-**Channels:** `options.expiration.warning`, `options.position.auto_closed`, `options.position.rolled`
+### Event Flow: Options Strategy Builder
+
+```
+OptionsStrategyBuilder.build_vertical_spread(params)
+    │
+    ├── StrategyValidator.validate_vertical_spread(params)
+    │       │
+    │       ├── Check quantity > 0
+    │       ├── Check strikes differ
+    │       └── Compute max profit / max loss / breakevens → StrategyAnalysis
+    │
+    ├── Build MultiLegOrder with 2 legs
+    │
+    ▼
+OptionsStrategyBuilder.build_and_submit(params, strategy_type)
+    │
+    ├── Build + validate → MultiLegOrder
+    ├── OptionsExecAdapter.submit_multileg_order()
+    └── publish("execution.order.submitted")
+```
+
+### Event Flow: Greeks Data
+
+```
+GreeksProvider.get_greeks(option_symbol)
+    │
+    ├── Check cache (TTL-based)
+    │   ├── HIT → return cached GreeksData
+    │   └── MISS ↓
+    │
+    ├── Fetch from data source
+    ├── Store in cache with timestamp
+    └── Return GreeksData(delta, gamma, theta, vega, rho, iv)
+
+GreeksProvider.get_portfolio_greeks(positions)
+    │
+    ├── For each option position → get_greeks(symbol)
+    ├── Multiply each greek by position quantity
+    ├── Sum across all positions
+    └── Return AggregatedGreeks(total_delta, total_gamma, total_theta, total_vega)
+```
+
+### Event Flow: Expiration Management
+
+```
+ExpirationManager._check_loop()  [runs every check_interval_seconds]
+    │
+    ▼
+check_expirations()
+    │
+    ├── For each tracked OptionsPosition:
+    │       │
+    │       ├── Compute DTE = expiration_date - today
+    │       │
+    │       ├── DTE <= auto_close_dte?
+    │       │   └── YES → close position, publish("options.expiration.auto_closed")
+    │       │
+    │       ├── DTE <= alert_dte?
+    │       │   └── YES → publish("options.expiration.alert")
+    │       │
+    │       └── roll_enabled AND DTE <= auto_close_dte?
+    │           └── YES → roll to roll_target_dte, publish("options.expiration.rolled")
+    │
+    └── Sleep(check_interval_seconds)
+```
+
+### Event Flow: Trailing Stop Ratcheting
+
+```
+TrailingStopManager.create_trailing_stop(symbol, qty, trail_amount|trail_percent)
+    │
+    ├── Place initial stop-loss order
+    ├── publish("trailing_stop.created")
+    │
+    ▼
+"quote" events (price monitoring)
+    │
+    ├── New high price detected?
+    │   └── YES → new_stop = highest_price - trail_amount
+    │             (or highest_price * (1 - trail_percent))
+    │             │
+    │             ├── Cancel existing stop order
+    │             ├── Place new stop at higher price
+    │             ├── Update highest_price, current_stop_price
+    │             └── publish("trailing_stop.ratcheted")
+    │
+    └── Stop order filled?
+        └── publish("trailing_stop.completed")
+```
+
+### Event Flow: Scaled Order
+
+```
+ScaledOrderManager.create_scaled_exit(symbol, tranches, stop_loss_price)
+    │
+    ├── Create ScaledExitOrder with N tranches
+    ├── Place limit sell for each tranche at tranche.price
+    ├── publish("scaled.exit.created")
+    │
+    ▼
+"execution.order.filled" events
+    │
+    ├── Tranche filled?
+    │   ├── Mark tranche.filled = True
+    │   ├── Reduce remaining_quantity
+    │   ├── Adjust stop-loss proportionally
+    │   ├── publish("scaled.exit.tranche_filled")
+    │   │
+    │   └── All tranches filled?
+    │       └── publish("scaled.exit.completed")
+    │
+    └── Stop-loss filled?
+        └── Cancel remaining tranche orders
+            └── publish("scaled.exit.stopped_out")
+```
 
 ## Component Lifecycle
 
 ### Startup Sequence
 
 ```
-1. Load configuration (config.toml + .env)
-2. Initialize structured logging (structlog)
-3. Create EventBus
-4. Create DataManager with DataConfig
-5. Register file providers (CsvBarProvider) if configured
-6. Start DataManager → connect and stream all registered providers
-7. Create OrderRouter
-8. Create PublicComExecAdapter → connect() → authenticate API
-   Register with OrderRouter for AssetClass.EQUITY
-9. Create CryptoExecAdapter (if crypto credentials configured) → connect()
-   Register with OrderRouter for AssetClass.CRYPTO
-10. Create OptionsExecAdapter → connect()
-    Register with OrderRouter for AssetClass.OPTION
-11. Create GreeksProvider (with client and refresh interval)
-12. Start portfolio refresh loop
-13. Create RiskManager with RiskConfig
-14. Create ExpirationManager (with config, event_bus, exec_adapter, strategy_builder) → start()
-15. Create BracketOrderManager → wire_events() → subscribe to execution + quote channels
-16. Create TrailingStopManager (with event_bus, exec_adapter) → wire_events()
-17. Create ScaledOrderManager (with event_bus, exec_adapter) → wire_events()
-18. Create StrategyManager (with bracket_manager) → wire_events() → subscribe to market data channels
-19. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
-20. Start uvicorn server
-21. Publish system ready event
+1.  Load configuration (config.toml + .env)
+2.  Initialize structured logging (structlog)
+3.  Create EventBus
+4.  Create DataManager with DataConfig
+5.  Register file providers (CsvBarProvider) if configured
+6.  Start DataManager → connect and stream all registered providers
+7.  Create PublicComExecAdapter → connect() → authenticate API
+8.  Create CryptoExecAdapter → connect() (if crypto credentials set)
+9.  Create OptionsExecAdapter → connect() (if options credentials set)
+10. Create OrderRouter → register adapters by AssetClass (STOCK, CRYPTO, OPTION)
+11. Start portfolio refresh loops (equity, crypto, options)
+12. Create RiskManager with RiskConfig + GreeksRiskConfig
+13. Create GreeksProvider
+14. Create ExpirationManager → start() → begin DTE monitoring loop
+15. Create OptionsStrategyBuilder (with OptionsExecAdapter + StrategyValidator)
+16. Create BracketOrderManager → wire_events()
+17. Create TrailingStopManager → wire_events()
+18. Create ScaledOrderManager → wire_events()
+19. Create StrategyManager → wire_events() → subscribe to market data channels
+20. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
+21. Start uvicorn server
+22. Publish system ready event
 ```
 
 ### Shutdown Sequence
 
 ```
-1. Receive SIGINT or SIGTERM
-2. StrategyManager.stop_all() → stop all active strategies
-3. StrategyManager.unwire_events() → unsubscribe from channels
-4. ScaledOrderManager.unwire_events() → unsubscribe from execution channels
-5. TrailingStopManager.unwire_events() → unsubscribe from quote + execution channels
-6. BracketOrderManager.unwire_events() → unsubscribe from execution + quote channels
-7. ExpirationManager.stop() → cancel expiration monitoring loop
-8. DashboardWSManager.stop() → close WebSocket connections
-9. OrderRouter.disconnect() → disconnect all registered adapters
+1.  Receive SIGINT or SIGTERM
+2.  StrategyManager.stop_all() → stop all active strategies
+3.  StrategyManager.unwire_events() → unsubscribe from channels
+4.  ScaledOrderManager.unwire_events()
+5.  TrailingStopManager.unwire_events()
+6.  BracketOrderManager.unwire_events()
+7.  ExpirationManager.stop() → cancel DTE monitoring loop
+8.  DashboardWSManager.stop() → close WebSocket connections
+9.  OrderRouter.disconnect() → disconnect all registered adapters
 10. DataManager.stop() → disconnect all providers, cancel streaming tasks
 11. Uvicorn server shutdown
 ```
@@ -338,30 +354,25 @@ trading_platform.main
     │   └── adapters.public_com.parse (sdk_*_to_platform)
     │
     ├── adapters.crypto.adapter (CryptoExecAdapter)
+    │   ├── adapters.crypto.client (CryptoClient)
+    │   └── adapters.crypto.config (CryptoConfig)
     │
     ├── adapters.options.adapter (OptionsExecAdapter)
+    │   ├── adapters.options.client (OptionsClient)
+    │   └── adapters.options.config (OptionsConfig)
+    │
+    ├── options.greeks (GreeksProvider, GreeksData, AggregatedGreeks)
+    ├── options.strategy_builder (OptionsStrategyBuilder)
+    │   ├── options.strategies (VerticalSpreadParams, IronCondorParams, ...)
+    │   └── options.validator (StrategyValidator)
+    ├── options.expiration (ExpirationManager, ExpirationConfig)
+    │
+    ├── orders.trailing_stop (TrailingStopManager, TrailingStop)
+    ├── orders.scaled (ScaledOrderManager, ScaledExitOrder, ScaledEntryOrder)
     │
     ├── bracket.manager (BracketOrderManager)
     │   ├── bracket.models (BracketOrder)
     │   └── bracket.enums (BracketState, BracketChannel)
-    │
-    ├── orders.trailing_stop (TrailingStopManager)
-    │   └── models (TrailingStop, TrailingStopState)
-    │
-    ├── orders.scaled (ScaledOrderManager)
-    │   └── models (ScaledExitOrder, ScaledEntryOrder, Tranche, ScaledOrderState)
-    │
-    ├── options.strategy_builder (OptionsStrategyBuilder)
-    │   └── options.strategies (VerticalSpreadParams, IronCondorParams, ...)
-    │
-    ├── options.validator (StrategyValidator)
-    │   └── options.strategies (StrategyAnalysis)
-    │
-    ├── options.greeks (GreeksProvider)
-    │   └── models (GreeksData, AggregatedGreeks)
-    │
-    ├── options.expiration (ExpirationManager)
-    │   └── models (ExpirationConfig, OptionsPosition)
     │
     ├── strategy.manager (StrategyManager)
     │   ├── strategy.base (Strategy ABC)
@@ -395,16 +406,16 @@ All paths flow through `DataManager`, which publishes to `Channel.QUOTE`, `Chann
 
 1. **Strategy** generates a signal in `on_bar()` / `on_quote()` / `on_trade()`
 2. **Strategy** calls `self.context.submit_order(order)`
-3. **StrategyContext** runs `RiskManager.pre_trade_check()` — rejects if any check fails
-4. **StrategyContext** calls `PublicComExecAdapter.submit_order()`
-5. **Adapter** builds SDK `OrderRequest`, calls Public.com API
+3. **StrategyContext** runs `RiskManager.pre_trade_check()` (including greeks checks for options) — rejects if any check fails
+4. **StrategyContext** calls `OrderRouter.submit_order()` — routes to the correct adapter by `AssetClass`
+5. **Adapter** (PublicCom, Crypto, or Options) builds SDK request and calls the API
 6. **Adapter** publishes `execution.order.submitted` and starts tracking
 7. **Order tracker** polls for status updates, publishes fill/cancel/reject events
 
 ### Portfolio Pipeline
 
-1. **PublicComExecAdapter** runs a background loop every `portfolio_refresh` seconds
-2. **Loop** calls `sync_portfolio()` → fetches positions and buying power from Public.com
+1. Each adapter (PublicCom, Crypto, Options) runs a background loop every `portfolio_refresh` seconds
+2. **Loop** calls `sync_portfolio()` → fetches positions and buying power
 3. **Adapter** publishes `execution.portfolio.update` and `execution.account.update`
 4. **StrategyManager** dispatches position updates to active strategies
-5. **RiskManager** updates portfolio value for concentration and drawdown checks
+5. **RiskManager** updates portfolio value for concentration, drawdown, and greeks checks

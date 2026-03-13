@@ -120,30 +120,12 @@ class Order(BaseModel):
     symbol: str = ""
     side: OrderSide = OrderSide.BUY
     order_type: OrderType = OrderType.MARKET
-    quantity: Decimal = Decimal("0")
+    quantity: float = 0.0
     limit_price: float | None = None
     stop_price: float | None = None
     status: OrderStatus = OrderStatus.NEW
     filled_quantity: float = 0.0
     filled_avg_price: float = 0.0
-    asset_class: AssetClass = AssetClass.STOCK
-    contract_type: ContractType | None = None       # CALL or PUT (options only)
-    strike_price: float | None = None               # options only
-    expiration_date: date | None = None              # options only
-    underlying_symbol: str | None = None             # options only
-    option_symbol: str | None = None                 # OCC-style symbol (options only)
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-```
-
-#### MultiLegOrder
-
-```python
-class MultiLegOrder(BaseModel):
-    order_id: str = ""
-    legs: list[Order] = []
-    strategy_type: str = ""                         # e.g. "vertical_spread", "iron_condor"
-    status: OrderStatus = OrderStatus.NEW
     created_at: datetime | None = None
     updated_at: datetime | None = None
 ```
@@ -201,9 +183,6 @@ class Channel(StrEnum):
     POSITION = "position"
     SYSTEM = "system"
     ERROR = "error"
-    EXPIRATION_WARNING = "options.expiration.warning"
-    POSITION_AUTO_CLOSED = "options.position.auto_closed"
-    POSITION_ROLLED = "options.position.rolled"
 
 class OrderSide(StrEnum):
     BUY = "buy"
@@ -227,13 +206,8 @@ class OrderStatus(StrEnum):
 
 class AssetClass(StrEnum):
     STOCK = "stock"
-    EQUITY = "equity"
     OPTION = "option"
     CRYPTO = "crypto"
-
-class ContractType(StrEnum):
-    CALL = "call"
-    PUT = "put"
 
 class BarType(StrEnum):
     MINUTE = "minute"
@@ -305,16 +279,23 @@ class CsvBarProvider(DataProvider):
     # Loads CSV on connect(), supports directory globbing
 ```
 
-
-
-```python
-    def __init__(self, file_path: str, replay_speed: float = 0.0)
-    # Implements all DataProvider methods
-```
-
 ---
 
 ## Adapters
+
+### ExecAdapter (ABC)
+
+`trading_platform.adapters.base.ExecAdapter`
+
+```python
+class ExecAdapter(ABC):
+    async def connect(self) -> None  # abstract
+    async def disconnect(self) -> None  # abstract
+    async def submit_order(self, order: Order) -> Any  # abstract
+    async def cancel_order(self, order_id: str) -> Any  # abstract
+    async def get_positions(self) -> list[Any]  # abstract
+    async def get_account(self) -> Any  # abstract
+```
 
 ### PublicComExecAdapter
 
@@ -356,23 +337,6 @@ class PublicComClient:
     async def perform_multileg_preflight(self, request: PreflightMultiLegRequest, account_id: str | None = None) -> Any
 ```
 
-### OrderRouter
-
-`trading_platform.core.order_router.OrderRouter`
-
-```python
-class OrderRouter(ExecAdapter):
-    def register(self, asset_class: AssetClass, adapter: ExecAdapter) -> None
-    def get_adapter(self, asset_class: AssetClass) -> ExecAdapter | None
-    async def connect(self) -> None
-    async def disconnect(self) -> None
-    async def submit_order(self, order: Order) -> Any  # routes by order.asset_class
-    async def submit_multileg_order(self, multileg: MultiLegOrder) -> Any
-    async def cancel_order(self, order_id: str) -> Any
-    async def get_positions(self) -> list[Any]
-    async def get_account(self) -> Any
-```
-
 ### CryptoExecAdapter
 
 `trading_platform.adapters.crypto.adapter.CryptoExecAdapter`
@@ -380,6 +344,7 @@ class OrderRouter(ExecAdapter):
 ```python
 class CryptoExecAdapter(ExecAdapter):
     def __init__(self, config: CryptoConfig, event_bus: EventBus) -> None
+
     async def connect(self) -> None
     async def disconnect(self) -> None
     async def submit_order(self, order: Order) -> Any
@@ -389,6 +354,38 @@ class CryptoExecAdapter(ExecAdapter):
     async def sync_portfolio(self) -> None
 ```
 
+Supports 24/7 trading with no market-hours checks. Handles fractional quantities via `Decimal`. Runs a background portfolio refresh loop every `portfolio_refresh` seconds.
+
+### CryptoClient
+
+`trading_platform.adapters.crypto.client.CryptoClient`
+
+```python
+class CryptoClient:
+    raw: AsyncPublicApiClient  # property
+
+    async def connect(self) -> None
+    async def disconnect(self) -> None
+    async def place_crypto_order(self, **kwargs: Any) -> Any
+    async def cancel_crypto_order(self, order_id: str) -> None
+    async def get_crypto_portfolio(self) -> Any
+```
+
+### CryptoConfig
+
+`trading_platform.adapters.crypto.config.CryptoConfig`
+
+```python
+@dataclass
+class CryptoConfig:
+    api_secret: str = ""
+    account_id: str = ""
+    trading_pairs: list[str] = ["BTC-USD", "ETH-USD"]
+    poll_interval: float = 2.0
+    portfolio_refresh: float = 30.0
+    token_validity_minutes: int = 15
+```
+
 ### OptionsExecAdapter
 
 `trading_platform.adapters.options.adapter.OptionsExecAdapter`
@@ -396,14 +393,86 @@ class CryptoExecAdapter(ExecAdapter):
 ```python
 class OptionsExecAdapter(ExecAdapter):
     def __init__(self, config: OptionsConfig, event_bus: EventBus) -> None
+
+    async def connect(self) -> None
+    async def disconnect(self) -> None
+    async def submit_order(self, order: Order) -> Any
     async def submit_option_order(self, order: Order) -> Any
     async def submit_multileg_order(self, multileg: MultiLegOrder) -> Any
+    async def cancel_order(self, order_id: str) -> Any
     async def cancel_option_order(self, order_id: str) -> Any
+    async def get_positions(self) -> list[Position]
     async def get_option_positions(self) -> list[Position]
+    async def get_account(self) -> dict[str, Any]
+    async def preflight_option_order(self, order: Order) -> Any
+    async def get_option_chain(self, underlying: str) -> Any
+    async def get_option_expirations(self, underlying: str) -> Any
+    async def sync_portfolio(self) -> None
+```
+
+Supports single-leg and multi-leg option orders. Runs a background portfolio refresh loop. Maps platform `OrderSide`/`OrderType` enums to SDK equivalents.
+
+### OptionsClient
+
+`trading_platform.adapters.options.client.OptionsClient`
+
+```python
+class OptionsClient:
+    raw: AsyncPublicApiClient  # property
+
+    async def connect(self) -> None
+    async def disconnect(self) -> None
+    async def place_option_order(self, request: OrderRequest, account_id: str | None = None) -> Any
+    async def place_multileg_order(self, request: MultilegOrderRequest, account_id: str | None = None) -> Any
+    async def cancel_order(self, order_id: str, account_id: str | None = None) -> None
+    async def get_option_portfolio(self, account_id: str | None = None) -> Any
+    async def perform_preflight(self, request: PreflightRequest, account_id: str | None = None) -> Any
+    async def perform_multileg_preflight(self, request: PreflightMultiLegRequest, account_id: str | None = None) -> Any
+    async def get_option_chain(self, underlying: str, account_id: str | None = None) -> Any
+    async def get_option_expirations(self, underlying: str, account_id: str | None = None) -> Any
+```
+
+### OptionsConfig
+
+`trading_platform.adapters.options.config.OptionsConfig`
+
+```python
+@dataclass
+class OptionsConfig:
+    api_secret: str = ""
+    account_id: str = ""
+    poll_interval: float = 2.0
+    portfolio_refresh: float = 30.0
+    token_validity_minutes: int = 15
+```
+
+### OrderRouter
+
+`trading_platform.core.order_router.OrderRouter`
+
+```python
+class OrderRouter(ExecAdapter):
+    def __init__(self) -> None
+
+    def register(self, asset_class: AssetClass, adapter: ExecAdapter) -> None
+    def get_adapter(self, asset_class: AssetClass) -> ExecAdapter | None
+    async def connect(self) -> None
+    async def disconnect(self) -> None
+    async def submit_order(self, order: Order) -> Any
+    async def cancel_order(self, order_id: str) -> Any
+    async def get_positions(self) -> list[Any]
+    async def get_account(self) -> Any
+
+    # Options-specific routing
+    async def submit_multileg_order(self, multileg: MultiLegOrder) -> Any
+    async def cancel_option_order(self, order_id: str) -> Any
+    async def get_option_positions(self) -> list[Any]
     async def preflight_option_order(self, order: Order) -> Any
     async def get_option_chain(self, underlying: str) -> Any
     async def get_option_expirations(self, underlying: str) -> Any
 ```
+
+Routes orders to asset-class-specific execution adapters by `order.asset_class`. Implements `ExecAdapter` so it can be used as a drop-in replacement. `get_positions()` and `get_account()` aggregate results from all registered adapters. `cancel_order()` tries all adapters.
 
 ---
 
@@ -504,6 +573,225 @@ class BracketChannel(StrEnum):
 
 ---
 
+## Options
+
+### OptionsStrategyBuilder
+
+`trading_platform.options.strategy_builder.OptionsStrategyBuilder`
+
+```python
+class OptionsStrategyBuilder:
+    def __init__(self) -> None
+
+    def build_vertical_spread(self, params: VerticalSpreadParams) -> MultiLegOrder
+    def build_iron_condor(self, params: IronCondorParams) -> MultiLegOrder
+    def build_straddle(self, params: StraddleParams) -> MultiLegOrder
+    def build_strangle(self, params: StrangleParams) -> MultiLegOrder
+    def build_butterfly_spread(self, params: ButterflySpreadParams) -> MultiLegOrder
+    def build_calendar_spread(self, params: CalendarSpreadParams) -> MultiLegOrder
+    async def build_and_submit(self, strategy_params: Any, order_router: Any) -> MultiLegOrder
+```
+
+Each `build_*` method validates parameters via `StrategyValidator`, constructs a `MultiLegOrder` with the correct legs, and returns it. `build_and_submit` builds, validates, and submits in one call.
+
+### StrategyValidator
+
+`trading_platform.options.validator.StrategyValidator`
+
+```python
+class StrategyValidator:
+    def validate_vertical_spread(self, params: VerticalSpreadParams) -> StrategyAnalysis
+    def validate_iron_condor(self, params: IronCondorParams) -> StrategyAnalysis
+    def validate_straddle(self, params: StraddleParams) -> StrategyAnalysis
+    def validate_strangle(self, params: StrangleParams) -> StrategyAnalysis
+    def validate_butterfly_spread(self, params: ButterflySpreadParams) -> StrategyAnalysis
+    def validate_calendar_spread(self, params: CalendarSpreadParams) -> StrategyAnalysis
+    def validate_multileg_order(self, order: MultiLegOrder) -> StrategyAnalysis
+```
+
+Each method validates parameters and computes max profit, max loss, and breakeven prices. Returns a `StrategyAnalysis` with `is_valid` and any validation errors.
+
+### StrategyValidationError
+
+`trading_platform.options.validator.StrategyValidationError`
+
+```python
+class StrategyValidationError(Exception):
+    errors: list[str]
+
+    def __init__(self, errors: list[str]) -> None
+```
+
+### Strategy Parameter Dataclasses
+
+`trading_platform.options.strategies`
+
+All are `@dataclass(frozen=True)`:
+
+```python
+class VerticalSpreadParams:
+    underlying: str
+    expiration: date
+    long_strike: Decimal
+    short_strike: Decimal
+    contract_type: ContractType
+    quantity: Decimal = Decimal("1")
+
+class IronCondorParams:
+    underlying: str
+    expiration: date
+    put_long_strike: Decimal
+    put_short_strike: Decimal
+    call_short_strike: Decimal
+    call_long_strike: Decimal
+    quantity: Decimal = Decimal("1")
+
+class StraddleParams:
+    underlying: str
+    expiration: date
+    strike: Decimal
+    quantity: Decimal = Decimal("1")
+    side: str = "long"
+
+class StrangleParams:
+    underlying: str
+    expiration: date
+    put_strike: Decimal
+    call_strike: Decimal
+    quantity: Decimal = Decimal("1")
+    side: str = "long"
+
+class ButterflySpreadParams:
+    underlying: str
+    expiration: date
+    lower_strike: Decimal
+    middle_strike: Decimal
+    upper_strike: Decimal
+    contract_type: ContractType
+    quantity: Decimal = Decimal("1")
+
+class CalendarSpreadParams:
+    underlying: str
+    expiration_near: date
+    expiration_far: date
+    strike: Decimal
+    contract_type: ContractType
+    quantity: Decimal = Decimal("1")
+```
+
+### StrategyAnalysis
+
+`trading_platform.options.strategies.StrategyAnalysis`
+
+```python
+@dataclass
+class StrategyAnalysis:
+    max_profit: Decimal | None = None
+    max_loss: Decimal | None = None
+    breakevens: list[Decimal] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    is_valid: bool  # property — True when len(errors) == 0
+```
+
+### GreeksProvider
+
+`trading_platform.options.greeks.GreeksProvider`
+
+```python
+class GreeksProvider:
+    def __init__(self, client: Any, refresh_interval: float = 30.0)
+
+    async def get_greeks(self, option_symbol: str) -> GreeksData
+    async def get_portfolio_greeks(self, positions: list[Any]) -> AggregatedGreeks
+    def invalidate(self, option_symbol: str | None = None) -> None
+```
+
+Fetches and caches option greeks with a TTL. `get_portfolio_greeks` aggregates greeks across all option positions. `invalidate` clears the cache for a single symbol or all symbols.
+
+### GreeksData
+
+`trading_platform.options.greeks.GreeksData`
+
+```python
+@dataclass(frozen=True)
+class GreeksData:
+    delta: float = 0.0
+    gamma: float = 0.0
+    theta: float = 0.0
+    vega: float = 0.0
+    rho: float = 0.0
+    implied_volatility: float = 0.0
+    timestamp: float = 0.0
+```
+
+### AggregatedGreeks
+
+`trading_platform.options.greeks.AggregatedGreeks`
+
+```python
+@dataclass(frozen=True)
+class AggregatedGreeks:
+    total_delta: float = 0.0
+    total_gamma: float = 0.0
+    total_theta: float = 0.0
+    total_vega: float = 0.0
+    position_count: int = 0
+```
+
+### ExpirationManager
+
+`trading_platform.options.expiration.ExpirationManager`
+
+```python
+class ExpirationManager:
+    def __init__(
+        self,
+        config: ExpirationConfig,
+        event_bus: EventBus,
+        exec_adapter: ExecAdapter | None = None,
+        strategy_builder: OptionsStrategyBuilder | None = None,
+    )
+
+    async def start(self) -> None
+    async def stop(self) -> None
+    def set_positions(self, positions: list[OptionsPosition]) -> None
+    async def check_expirations(self, today: date | None = None) -> None
+```
+
+Monitors DTE for tracked option positions. Auto-closes positions at `auto_close_dte`, publishes alerts at `alert_dte`, and optionally rolls positions to `roll_target_dte` when `roll_enabled` is set.
+
+### ExpirationConfig
+
+`trading_platform.options.expiration.ExpirationConfig`
+
+```python
+@dataclass
+class ExpirationConfig:
+    auto_close_dte: int = 1
+    alert_dte: int = 7
+    roll_enabled: bool = False
+    roll_target_dte: int = 30
+    check_interval_seconds: float = 60.0
+```
+
+### OptionsPosition
+
+`trading_platform.options.expiration.OptionsPosition`
+
+```python
+@dataclass
+class OptionsPosition:
+    symbol: str
+    underlying: str
+    quantity: float
+    contract_type: ContractType
+    strike_price: float
+    expiration_date: date
+    strategy_type: str = ""
+```
+
+---
+
 ## Trailing Stops
 
 ### TrailingStopManager
@@ -511,27 +799,8 @@ class BracketChannel(StrEnum):
 `trading_platform.orders.trailing_stop.TrailingStopManager`
 
 ```python
-class TrailingStopState(StrEnum):
-    PENDING = "pending"
-    ACTIVE = "active"
-    COMPLETED = "completed"
-    CANCELED = "canceled"
-    ERROR = "error"
-
-class TrailingStop:  # dataclass
-    trailing_stop_id: str
-    symbol: str
-    quantity: Decimal
-    trail_amount: Decimal
-    trail_percent: Decimal
-    current_stop_price: Decimal
-    highest_price: Decimal
-    stop_order_id: str | None
-    state: TrailingStopState
-    exit_fill_price: Decimal | None
-
 class TrailingStopManager:
-    def __init__(self, event_bus: EventBus, exec_adapter: ExecAdapter | None = None) -> None
+    def __init__(self, event_bus: EventBus, exec_adapter: ExecAdapter | None = None)
 
     async def create_trailing_stop(
         self,
@@ -549,6 +818,56 @@ class TrailingStopManager:
     async def unwire_events(self) -> None
 ```
 
+Creates ratcheting stop-loss orders that follow price upward. Provide either `trail_amount` (absolute dollar amount) or `trail_percent` (e.g., `Decimal("0.05")` for 5%). Monitors quote events and cancels/replaces the stop order when a new high is reached.
+
+### TrailingStop
+
+`trading_platform.orders.trailing_stop.TrailingStop`
+
+```python
+@dataclass
+class TrailingStop:
+    trailing_stop_id: str
+    symbol: str
+    quantity: Decimal
+    trail_amount: Decimal | None
+    trail_percent: Decimal | None
+    current_stop_price: Decimal
+    highest_price: Decimal
+    stop_order_id: str | None
+    state: TrailingStopState
+    exit_fill_price: Decimal | None
+    created_at: datetime
+    completed_at: datetime | None
+```
+
+### TrailingStopState
+
+`trading_platform.orders.trailing_stop.TrailingStopState`
+
+```python
+class TrailingStopState(StrEnum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    ERROR = "error"
+```
+
+### TrailingStopChannel
+
+`trading_platform.orders.trailing_stop.TrailingStopChannel`
+
+```python
+class TrailingStopChannel(StrEnum):
+    TRAILING_STOP_PLACED = "trailing_stop.placed"
+    TRAILING_STOP_UPDATED = "trailing_stop.updated"
+    TRAILING_STOP_COMPLETED = "trailing_stop.completed"
+    TRAILING_STOP_CANCELED = "trailing_stop.canceled"
+    TRAILING_STOP_ERROR = "trailing_stop.error"
+    TRAILING_STOP_STATE_CHANGE = "trailing_stop.state_change"
+```
+
 ---
 
 ## Scaled Orders
@@ -558,39 +877,8 @@ class TrailingStopManager:
 `trading_platform.orders.scaled.ScaledOrderManager`
 
 ```python
-class ScaledOrderState(StrEnum):
-    PENDING = "pending"
-    ACTIVE = "active"
-    COMPLETED = "completed"
-    CANCELED = "canceled"
-    ERROR = "error"
-
-class Tranche:  # dataclass
-    price: Decimal
-    quantity: Decimal
-    filled: bool = False
-    order_id: str | None = None
-
-class ScaledExitOrder:  # dataclass
-    scaled_id: str
-    symbol: str
-    total_quantity: Decimal
-    tranches: list[Tranche]
-    stop_loss_price: Decimal
-    remaining_quantity: Decimal
-    state: ScaledOrderState
-
-class ScaledEntryOrder:  # dataclass
-    scaled_id: str
-    symbol: str
-    total_quantity: Decimal
-    tranches: list[Tranche]
-    stop_loss_price: Decimal
-    filled_quantity: Decimal
-    state: ScaledOrderState
-
 class ScaledOrderManager:
-    def __init__(self, event_bus: EventBus, exec_adapter: ExecAdapter | None = None) -> None
+    def __init__(self, event_bus: EventBus, exec_adapter: ExecAdapter | None = None)
 
     async def create_scaled_exit(
         self,
@@ -614,116 +902,89 @@ class ScaledOrderManager:
     async def unwire_events(self) -> None
 ```
 
----
+Multi-tranche entries and exits with proportional quantity allocation. `take_profit_levels` and `entry_levels` are lists of `(price, quantity)` tuples. As tranches fill, the stop-loss is adjusted proportionally.
 
-## Options
+### ScaledExitOrder
 
-### OptionsStrategyBuilder
-
-`trading_platform.options.strategy_builder.OptionsStrategyBuilder`
+`trading_platform.orders.scaled.ScaledExitOrder`
 
 ```python
-class OptionsStrategyBuilder:
-    def build_vertical_spread(self, params: VerticalSpreadParams) -> MultiLegOrder
-    def build_iron_condor(self, params: IronCondorParams) -> MultiLegOrder
-    def build_straddle(self, params: StraddleParams) -> MultiLegOrder
-    def build_strangle(self, params: StrangleParams) -> MultiLegOrder
-    def build_butterfly_spread(self, params: ButterflySpreadParams) -> MultiLegOrder
-    def build_calendar_spread(self, params: CalendarSpreadParams) -> MultiLegOrder
-    async def build_and_submit(self, strategy_params: Any, order_router: OrderRouter) -> MultiLegOrder
-```
-
-### Strategy Parameter Models
-
-`trading_platform.options.strategies`
-
-All frozen dataclasses:
-
-- `VerticalSpreadParams` — long/short strike, expiration, contract type, quantity
-- `IronCondorParams` — call/put spread strikes, expiration, quantity
-- `StraddleParams` — strike, expiration, quantity
-- `StrangleParams` — call/put strikes, expiration, quantity
-- `ButterflySpreadParams` — lower/middle/upper strikes, expiration, contract type, quantity
-- `CalendarSpreadParams` — strike, near/far expiration, contract type, quantity
-- `StrategyAnalysis` — is_valid, max_profit, max_loss, breakeven points, warnings
-
-### StrategyValidator
-
-`trading_platform.options.validator.StrategyValidator`
-
-```python
-class StrategyValidator:
-    def validate_vertical_spread(self, params: VerticalSpreadParams) -> StrategyAnalysis
-    def validate_iron_condor(self, params: IronCondorParams) -> StrategyAnalysis
-    def validate_straddle(self, params: StraddleParams) -> StrategyAnalysis
-    def validate_strangle(self, params: StrangleParams) -> StrategyAnalysis
-    def validate_butterfly_spread(self, params: ButterflySpreadParams) -> StrategyAnalysis
-    def validate_calendar_spread(self, params: CalendarSpreadParams) -> StrategyAnalysis
-    def validate_multileg_order(self, order: MultiLegOrder) -> StrategyAnalysis
-```
-
-### GreeksProvider
-
-`trading_platform.options.greeks.GreeksProvider`
-
-```python
-class GreeksData:  # frozen dataclass
-    delta: float
-    gamma: float
-    theta: float
-    vega: float
-    rho: float
-    implied_volatility: float
-    timestamp: float
-
-class AggregatedGreeks:  # frozen dataclass
-    total_delta: float
-    total_gamma: float
-    total_theta: float
-    total_vega: float
-    position_count: int
-
-class GreeksProvider:
-    def __init__(self, client: Any, refresh_interval: float = 30.0) -> None
-    async def get_greeks(self, option_symbol: str) -> GreeksData
-    async def get_portfolio_greeks(self, positions: list[Any]) -> AggregatedGreeks
-    def invalidate(self, option_symbol: str | None = None) -> None
-```
-
-### ExpirationManager
-
-`trading_platform.options.expiration.ExpirationManager`
-
-```python
-class ExpirationConfig:  # dataclass
-    auto_close_dte: int = 1
-    alert_dte: int = 7
-    roll_enabled: bool = False
-    roll_target_dte: int = 30
-    check_interval_seconds: float = 60.0
-
-class OptionsPosition:  # dataclass
+@dataclass
+class ScaledExitOrder:
+    scaled_id: str
     symbol: str
-    underlying: str
-    quantity: float
-    contract_type: ContractType
-    strike_price: float
-    expiration_date: date
-    strategy_type: str = ""
+    total_quantity: Decimal
+    tranches: list[Tranche]
+    stop_loss_price: Decimal
+    stop_order_id: str | None
+    remaining_quantity: Decimal
+    state: ScaledOrderState
+    created_at: datetime
+    completed_at: datetime | None
+```
 
-class ExpirationManager:
-    def __init__(
-        self,
-        config: ExpirationConfig,
-        event_bus: EventBus,
-        exec_adapter: ExecAdapter | None = None,
-        strategy_builder: OptionsStrategyBuilder | None = None,
-    ) -> None
+### ScaledEntryOrder
 
-    async def start(self) -> None
-    async def stop(self) -> None
-    def set_positions(self, positions: list[OptionsPosition]) -> None
-    async def check_expirations(self, today: date | None = None) -> None
+`trading_platform.orders.scaled.ScaledEntryOrder`
+
+```python
+@dataclass
+class ScaledEntryOrder:
+    scaled_id: str
+    symbol: str
+    total_quantity: Decimal
+    tranches: list[Tranche]
+    stop_loss_price: Decimal
+    stop_order_id: str | None
+    filled_quantity: Decimal
+    state: ScaledOrderState
+    created_at: datetime
+    completed_at: datetime | None
+```
+
+### Tranche
+
+`trading_platform.orders.scaled.Tranche`
+
+```python
+@dataclass
+class Tranche:
+    price: Decimal
+    quantity: Decimal
+    filled: bool = False
+    order_id: str | None = None
+```
+
+### ScaledOrderState
+
+`trading_platform.orders.scaled.ScaledOrderState`
+
+```python
+class ScaledOrderState(StrEnum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    ERROR = "error"
+```
+
+### ScaledOrderChannel
+
+`trading_platform.orders.scaled.ScaledOrderChannel`
+
+```python
+class ScaledOrderChannel(StrEnum):
+    SCALED_EXIT_PLACED = "scaled.exit.placed"
+    SCALED_EXIT_TRANCHE_FILLED = "scaled.exit.tranche_filled"
+    SCALED_EXIT_COMPLETED = "scaled.exit.completed"
+    SCALED_EXIT_STOPPED_OUT = "scaled.exit.stopped_out"
+    SCALED_ENTRY_PLACED = "scaled.entry.placed"
+    SCALED_ENTRY_TRANCHE_FILLED = "scaled.entry.tranche_filled"
+    SCALED_ENTRY_COMPLETED = "scaled.entry.completed"
+    SCALED_STOP_ADJUSTED = "scaled.stop_adjusted"
+    SCALED_STATE_CHANGE = "scaled.state_change"
+    SCALED_ERROR = "scaled.error"
+    SCALED_CANCELED = "scaled.canceled"
 ```
 
 ---
@@ -903,11 +1164,12 @@ def check_portfolio_drawdown(state: RiskState, config: RiskConfig) -> tuple[bool
 def check_daily_trade_count(state: RiskState, config: RiskConfig) -> tuple[bool, str]
 ```
 
-### Greeks Risk Checks
+### GreeksRiskConfig
 
-`trading_platform.risk.greeks_checks`
+`trading_platform.risk.greeks_checks.GreeksRiskConfig`
 
 ```python
+@dataclass
 class GreeksRiskConfig:
     max_portfolio_delta: float | None = None
     max_portfolio_gamma: float | None = None
@@ -919,7 +1181,11 @@ class GreeksRiskConfig:
     greeks_refresh_interval_seconds: float = 30.0
 ```
 
-All return `tuple[bool, str]` -- `(passed, reason)`:
+### Greeks Risk Check Functions
+
+`trading_platform.risk.greeks_checks`
+
+All are async and return `tuple[bool, str]` — `(passed, reason)`:
 
 ```python
 async def check_portfolio_delta(provider: GreeksProvider, positions: list[Any], config: GreeksRiskConfig) -> tuple[bool, str]
@@ -928,6 +1194,8 @@ async def check_theta_decay(provider: GreeksProvider, positions: list[Any], conf
 async def check_vega_exposure(provider: GreeksProvider, positions: list[Any], config: GreeksRiskConfig) -> tuple[bool, str]
 async def check_single_position_greeks(provider: GreeksProvider, order: Order, config: GreeksRiskConfig) -> tuple[bool, str]
 ```
+
+`check_portfolio_delta/gamma/vega` compare aggregated portfolio greeks against the configured limits. `check_theta_decay` ensures daily theta does not exceed `max_daily_theta`. `check_single_position_greeks` checks per-position delta, gamma, and vega limits for a new order.
 
 ---
 
@@ -942,15 +1210,47 @@ def create_app(
     event_bus: EventBus,
     data_manager: Any = None,
     exec_adapter: Any = None,
-    order_router: Any = None,
     strategy_manager: Any = None,
     risk_manager: Any = None,
-    greeks_provider: Any = None,
-    expiration_manager: Any = None,
     trailing_stop_manager: Any = None,
     scaled_order_manager: Any = None,
+    bracket_order_manager: Any = None,
+    greeks_provider: Any = None,
+    expiration_manager: Any = None,
+    options_strategy_builder: Any = None,
 ) -> tuple[FastAPI, DashboardWSManager]
 ```
+
+### REST Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/status` | System status, event bus stats, provider status |
+| `GET` | `/api/portfolio` | Positions and account info |
+| `GET` | `/api/orders` | Tracked orders |
+| `POST` | `/api/orders/{order_id}/cancel` | Cancel an order |
+| `GET` | `/api/strategies` | All registered strategies |
+| `POST` | `/api/strategies/{strategy_id}/start` | Start a strategy |
+| `POST` | `/api/strategies/{strategy_id}/stop` | Stop a strategy |
+| `GET` | `/api/risk` | Current risk state |
+| `GET` | `/api/risk/violations` | Risk violation history |
+| `GET` | `/api/pnl` | Daily and cumulative P&L |
+| `GET` | `/api/trailing-stops` | Active trailing stops |
+| `GET` | `/api/scaled-orders` | Scaled exits and entries |
+| `GET` | `/api/brackets` | All bracket orders |
+| `POST` | `/api/brackets/{bracket_id}/cancel` | Cancel a bracket order |
+| `GET` | `/api/options/greeks/{option_symbol}` | Greeks for a single option |
+| `GET` | `/api/options/portfolio-greeks` | Aggregated portfolio greeks |
+| `GET` | `/api/options/expirations` | Tracked option positions with DTE |
+
+### Data Ingestion Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/data/bars` | Ingest bar data |
+| `POST` | `/api/data/quotes` | Ingest quote data |
+| `POST` | `/api/data/trades` | Ingest trade data |
+| `WS` | `/ws/data` | Stream data via WebSocket |
 
 ### DashboardWSManager
 
@@ -977,11 +1277,13 @@ class DashboardWSManager:
 class Settings:
     data: DataSettings
     public_com: PublicComSettings
-    crypto: CryptoSettings            # exchange, api_key, api_secret, etc.
-    options: OptionsSettings           # options adapter configuration
+    crypto: CryptoSettings
+    options: OptionsSettings
+    trailing_stop: TrailingStopSettings
+    expiration: ExpirationSettings
     dashboard: DashboardSettings
     platform: PlatformSettings
-    risk: RiskSettings                 # includes risk.greeks (GreeksRiskConfig)
+    risk: RiskSettings          # includes risk.greeks subsection
 ```
 
 ### Functions

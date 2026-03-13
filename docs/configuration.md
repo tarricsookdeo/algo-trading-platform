@@ -6,10 +6,14 @@ The platform uses two configuration sources: `.env` for secrets and `config.toml
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PUBLIC_API_SECRET` | No | Public.com API secret key for order execution |
+| `PUBLIC_API_SECRET` | No | Public.com API secret key for equity/options execution |
 | `PUBLIC_ACCOUNT_ID` | No | Public.com account identifier |
+| `CRYPTO_API_SECRET` | No | Crypto exchange API secret key |
+| `CRYPTO_ACCOUNT_ID` | No | Crypto exchange account identifier |
+| `OPTIONS_API_SECRET` | No | Options API secret (if separate from Public.com) |
+| `OPTIONS_ACCOUNT_ID` | No | Options account identifier |
 
-The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCOUNT_ID` are not set. Data ingestion, strategies, and the dashboard work without execution credentials.
+The platform starts in **data-only mode** if no execution credentials are set. Data ingestion, strategies, and the dashboard work without execution credentials. Each adapter activates independently when its credentials are present.
 
 ## Config File (`config.toml`)
 
@@ -29,6 +33,37 @@ The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCO
 | `poll_interval` | float | `2.0` | Order status polling interval in seconds |
 | `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
 
+### `[crypto]` — Crypto Trading Settings
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `trading_pairs` | list | `["BTC-USD", "ETH-USD"]` | Crypto trading pairs to enable |
+| `poll_interval` | float | `2.0` | Order status polling interval in seconds |
+| `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
+
+### `[options]` — Options Trading Settings
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `poll_interval` | float | `2.0` | Order status polling interval in seconds |
+| `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
+
+### `[trailing_stop]` — Trailing Stop Defaults
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| (No required settings) | — | — | Defaults are built into `TrailingStopManager`; override here if needed |
+
+### `[expiration]` — Options Expiration Management
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto_close_dte` | int | `1` | Auto-close option positions at this DTE |
+| `alert_dte` | int | `7` | Publish alert when DTE reaches this threshold |
+| `roll_enabled` | bool | `false` | Enable automatic rolling to a later expiration |
+| `roll_target_dte` | int | `30` | Target DTE when rolling positions |
+| `check_interval_seconds` | float | `60.0` | How often to check expirations (seconds) |
+
 ### `[risk]` — Risk Management Settings
 
 | Field | Type | Default | Description |
@@ -43,6 +78,19 @@ The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCO
 | `allowed_symbols` | list | `[]` | Symbol allowlist (empty = allow all) |
 | `blocked_symbols` | list | `[]` | Symbol blocklist (checked before allowlist) |
 
+### `[risk.greeks]` — Greeks Risk Limits
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_portfolio_delta` | float | `500.0` | Maximum absolute portfolio delta |
+| `max_portfolio_gamma` | float | `100.0` | Maximum absolute portfolio gamma |
+| `max_daily_theta` | float | `-200.0` | Maximum daily theta decay (negative value) |
+| `max_portfolio_vega` | float | `1000.0` | Maximum absolute portfolio vega |
+| `max_position_delta` | float | `None` | Per-position delta limit (optional) |
+| `max_position_gamma` | float | `None` | Per-position gamma limit (optional) |
+| `max_position_vega` | float | `None` | Per-position vega limit (optional) |
+| `greeks_refresh_interval_seconds` | float | `30.0` | Greeks cache refresh interval |
+
 ### `[dashboard]` — Dashboard Settings
 
 | Field | Type | Default | Description |
@@ -56,37 +104,6 @@ The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCO
 |-------|------|---------|-------------|
 | `log_level` | string | `"INFO"` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `symbols` | list | `["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]` | Default symbol list for strategies |
-
-### `[crypto]` — Crypto Trading Settings
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `trading_pairs` | list | `["BTC-USD", "ETH-USD"]` | Supported crypto trading pairs |
-| `poll_interval` | float | `2.0` | Order status polling interval in seconds |
-| `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
-
-### `[options]` — Options Trading Settings
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `poll_interval` | float | `2.0` | Order status polling interval in seconds |
-| `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
-
-### `[options.expiration]` — Expiration Management Settings
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `auto_close_dte` | int | `1` | Auto-close positions at N DTE to avoid assignment |
-| `alert_dte` | int | `7` | Send alert when position reaches N DTE |
-| `roll_enabled` | bool | `false` | Attempt to roll position to next expiration on auto-close |
-| `roll_target_dte` | int | `30` | Target DTE for rolled positions |
-| `check_interval_seconds` | float | `60.0` | How often to check DTE on positions |
-
-### `[risk.greeks]` — Greeks Risk Limits
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `max_portfolio_delta` | float | `500.0` | Maximum absolute portfolio delta |
-| `max_portfolio_gamma` | float | `100.0` | Maximum absolute portfolio gamma |
-| `max_daily_theta` | float | `-200.0` | Maximum daily theta decay (negative = max loss from decay) |
-| `max_portfolio_vega` | float | `1000.0` | Maximum absolute portfolio vega |
-| `greeks_refresh_interval_seconds` | float | `30.0` | How often to refresh greeks from broker |
 
 ## Environment Variable Precedence
 
@@ -180,6 +197,46 @@ port = 8080
 log_level = "INFO"
 ```
 
+### Crypto Trading
+
+24/7 crypto trading with custom pairs:
+
+```toml
+[crypto]
+trading_pairs = ["BTC-USD", "ETH-USD", "SOL-USD"]
+poll_interval = 1.0
+portfolio_refresh = 15.0
+
+[risk]
+max_order_value = 10000.0
+daily_loss_limit = -2000.0
+```
+
+### Options Trading with Greeks Limits
+
+Active options trading with greeks-aware risk controls:
+
+```toml
+[options]
+poll_interval = 1.0
+portfolio_refresh = 15.0
+
+[expiration]
+auto_close_dte = 1
+alert_dte = 7
+roll_enabled = true
+roll_target_dte = 30
+
+[risk]
+max_order_value = 25000.0
+
+[risk.greeks]
+max_portfolio_delta = 300.0
+max_portfolio_gamma = 50.0
+max_daily_theta = -100.0
+max_portfolio_vega = 500.0
+```
+
 ### Data-Only Mode (No Execution)
 
 To run without execution (omit Public.com credentials):
@@ -195,39 +252,6 @@ csv_directory = "/path/to/csvs"
 
 [platform]
 log_level = "DEBUG"
-```
-
-### Options + Greeks Risk Profile
-
-```toml
-[options]
-poll_interval = 2.0
-portfolio_refresh = 15.0
-
-[options.expiration]
-auto_close_dte = 1
-alert_dte = 7
-roll_enabled = true
-roll_target_dte = 30
-
-[risk.greeks]
-max_portfolio_delta = 500.0
-max_portfolio_gamma = 100.0
-max_daily_theta = -200.0
-max_portfolio_vega = 1000.0
-```
-
-### Crypto Trading Profile
-
-```toml
-[crypto]
-trading_pairs = ["BTC-USD", "ETH-USD", "SOL-USD"]
-poll_interval = 2.0
-portfolio_refresh = 15.0
-
-[risk]
-max_position_size = 5000.0
-max_order_value = 100000.0
 ```
 
 ## CLI Options

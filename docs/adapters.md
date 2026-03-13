@@ -1,6 +1,6 @@
 # Data Providers & Adapters Guide
 
-The platform uses a **bring-your-own-data (BYOD)** architecture for market data and **PublicComExecAdapter** for order execution. All data flows through the EventBus.
+The platform uses a **bring-your-own-data (BYOD)** architecture for market data and multiple execution adapters for order placement. The **OrderRouter** dispatches orders to **PublicComExecAdapter** (equities), **CryptoExecAdapter** (crypto), or **OptionsExecAdapter** (options) based on asset class. All data flows through the EventBus.
 
 ## Data Ingestion Overview
 
@@ -134,19 +134,6 @@ async for bar in provider.stream_bars([]):
 
 # Historical query
 bars = await provider.get_historical_bars("AAPL", start, end)
-```
-
----
-
-
-
-
-```bash
-```
-
-```python
-
-await provider.connect()
 ```
 
 ---
@@ -484,6 +471,205 @@ The adapter publishes to these channels:
 
 ---
 
+## Crypto Execution Adapter
+
+`trading_platform.adapters.crypto.adapter.CryptoExecAdapter`
+
+The crypto adapter provides 24/7 trading with no market-hours checks and handles fractional quantities via Python's `Decimal` type.
+
+### Setup
+
+Set environment variables in `.env`:
+
+```bash
+CRYPTO_API_SECRET=your_crypto_api_secret
+CRYPTO_ACCOUNT_ID=your_crypto_account_id
+```
+
+Configure trading pairs in `config.toml`:
+
+```toml
+[crypto]
+trading_pairs = ["BTC-USD", "ETH-USD", "SOL-USD"]
+poll_interval = 2.0
+portfolio_refresh = 30.0
+```
+
+### Usage
+
+```python
+from trading_platform.adapters.crypto.config import CryptoConfig
+from trading_platform.adapters.crypto.adapter import CryptoExecAdapter
+from trading_platform.core.events import EventBus
+
+config = CryptoConfig(
+    api_secret="your_api_secret",
+    account_id="your_account_id",
+    trading_pairs=["BTC-USD", "ETH-USD"],
+)
+bus = EventBus()
+adapter = CryptoExecAdapter(config, bus)
+await adapter.connect()
+```
+
+### Order Placement
+
+```python
+from trading_platform.core.models import Order
+from trading_platform.core.enums import OrderSide, OrderType, AssetClass
+
+order = Order(
+    symbol="BTC-USD",
+    side=OrderSide.BUY,
+    order_type=OrderType.LIMIT,
+    quantity=0.001,  # Fractional quantity supported
+    limit_price=45000.00,
+    asset_class=AssetClass.CRYPTO,
+)
+result = await adapter.submit_order(order)
+```
+
+### Portfolio Sync
+
+The adapter runs a background refresh loop every `portfolio_refresh` seconds. It fetches crypto positions and buying power, then publishes `execution.portfolio.update` and `execution.account.update` events.
+
+```python
+await adapter.sync_portfolio()
+positions = await adapter.get_positions()
+account = await adapter.get_account()
+```
+
+### Key Differences from Equity Adapter
+
+- **No market hours** — Trades execute 24/7
+- **Decimal quantities** — Handles fractional crypto amounts (e.g., 0.00123 BTC)
+- **Trading pair format** — Uses `BTC-USD` format (not ticker symbols)
+- **Separate API methods** — Uses `place_crypto_order` / `cancel_crypto_order` / `get_crypto_portfolio` on the SDK
+
+---
+
+## Options Execution Adapter
+
+`trading_platform.adapters.options.adapter.OptionsExecAdapter`
+
+The options adapter supports single-leg and multi-leg option order submission, option chain queries, preflight checks, and portfolio sync.
+
+### Setup
+
+Set environment variables in `.env`:
+
+```bash
+OPTIONS_API_SECRET=your_options_api_secret
+OPTIONS_ACCOUNT_ID=your_options_account_id
+```
+
+Configure in `config.toml`:
+
+```toml
+[options]
+poll_interval = 2.0
+portfolio_refresh = 30.0
+```
+
+### Usage
+
+```python
+from trading_platform.adapters.options.config import OptionsConfig
+from trading_platform.adapters.options.adapter import OptionsExecAdapter
+from trading_platform.core.events import EventBus
+
+config = OptionsConfig(
+    api_secret="your_api_secret",
+    account_id="your_account_id",
+)
+bus = EventBus()
+adapter = OptionsExecAdapter(config, bus)
+await adapter.connect()
+```
+
+### Single-Leg Option Order
+
+```python
+order = Order(
+    symbol="AAPL250321C00150000",  # OCC format
+    side=OrderSide.BUY,
+    order_type=OrderType.LIMIT,
+    quantity=1.0,
+    limit_price=5.00,
+    asset_class=AssetClass.OPTION,
+)
+result = await adapter.submit_option_order(order)
+```
+
+### Multi-Leg Order
+
+```python
+from trading_platform.core.models import MultiLegOrder
+
+multileg = MultiLegOrder(...)  # Built by OptionsStrategyBuilder
+result = await adapter.submit_multileg_order(multileg)
+```
+
+For building multi-leg orders, use the `OptionsStrategyBuilder` which constructs validated `MultiLegOrder` objects for verticals, iron condors, straddles, strangles, butterflies, and calendars. See [API Reference](api-reference.md#optionsstrategybuilder).
+
+### Option Chain and Expirations
+
+```python
+chain = await adapter.get_option_chain("AAPL")
+expirations = await adapter.get_option_expirations("AAPL")
+```
+
+### Preflight
+
+```python
+cost = await adapter.preflight_option_order(order)
+```
+
+### Portfolio Sync
+
+Like the equity and crypto adapters, the options adapter runs a background loop to sync positions and account data.
+
+```python
+await adapter.sync_portfolio()
+positions = await adapter.get_option_positions()
+account = await adapter.get_account()
+```
+
+---
+
+## Order Router
+
+`trading_platform.core.order_router.OrderRouter`
+
+The `OrderRouter` dispatches orders to the correct execution adapter based on `order.asset_class`. It implements the `ExecAdapter` interface, so it can be used as a drop-in replacement anywhere an adapter is expected.
+
+### Setup
+
+```python
+from trading_platform.core.order_router import OrderRouter
+from trading_platform.core.enums import AssetClass
+
+router = OrderRouter()
+router.register(AssetClass.STOCK, public_com_adapter)
+router.register(AssetClass.CRYPTO, crypto_adapter)
+router.register(AssetClass.OPTION, options_adapter)
+await router.connect()
+```
+
+### Routing Behavior
+
+| Method | Behavior |
+|--------|----------|
+| `submit_order(order)` | Routes to adapter matching `order.asset_class` |
+| `cancel_order(order_id)` | Tries all registered adapters |
+| `get_positions()` | Aggregates positions from all adapters |
+| `get_account()` | Aggregates account info from all adapters |
+| `submit_multileg_order(multileg)` | Routes to `OPTION` adapter |
+| `get_option_chain(underlying)` | Routes to `OPTION` adapter |
+| `get_option_expirations(underlying)` | Routes to `OPTION` adapter |
+
+---
+
 ## ExecAdapter ABC
 
 To implement a custom execution adapter:
@@ -501,134 +687,3 @@ class MyExecAdapter(ExecAdapter):
 ```
 
 Publish order events to the `execution.*` channels on the EventBus.
-
----
-
-## Crypto Execution Adapter
-
-`trading_platform.adapters.crypto.adapter.CryptoExecAdapter`
-
-The crypto adapter enables cryptocurrency trading via Public.com's crypto endpoints, using the same `publicdotcom-py` SDK.
-
-**Configuration:**
-```python
-from trading_platform.adapters.crypto.config import CryptoConfig
-from trading_platform.adapters.crypto.adapter import CryptoExecAdapter
-
-config = CryptoConfig(
-    api_secret="your_api_secret",
-    account_id="your_account_id",
-    trading_pairs=["BTC-USD", "ETH-USD"],
-)
-adapter = CryptoExecAdapter(config, event_bus)
-await adapter.connect()
-```
-
-**Fractional Quantities:**
-Crypto supports fractional quantities (e.g., 0.005 BTC). The Order model's `quantity` field uses `Decimal` to support this.
-
-**Symbol Format:**
-Crypto uses pair format: "BTC-USD", "ETH-USD", "SOL-USD".
-
-**24/7 Trading:**
-Crypto markets never close. The adapter operates continuously without market-hours restrictions.
-
-**Order Types:**
-Market and limit orders are supported. Stop orders depend on Public.com's crypto API support.
-
-**Example:**
-```python
-from trading_platform.core.models import Order
-from trading_platform.core.enums import OrderSide, OrderType, AssetClass
-
-order = Order(
-    symbol="BTC-USD",
-    side=OrderSide.BUY,
-    order_type=OrderType.LIMIT,
-    quantity=Decimal("0.005"),
-    limit_price=65000.00,
-    asset_class=AssetClass.CRYPTO,
-)
-result = await adapter.submit_order(order)
-```
-
----
-
-## Options Execution Adapter
-
-`trading_platform.adapters.options.adapter.OptionsExecAdapter`
-
-The options adapter handles single-leg and multi-leg options orders via Public.com.
-
-**Configuration:**
-```python
-from trading_platform.adapters.options.config import OptionsConfig
-from trading_platform.adapters.options.adapter import OptionsExecAdapter
-
-config = OptionsConfig(
-    api_secret="your_api_secret",
-    account_id="your_account_id",
-)
-adapter = OptionsExecAdapter(config, event_bus)
-await adapter.connect()
-```
-
-**Single-Leg Order:**
-```python
-from trading_platform.core.enums import ContractType
-
-order = Order(
-    symbol="AAPL250321C00150000",
-    side=OrderSide.BUY,
-    order_type=OrderType.LIMIT,
-    quantity=Decimal("1"),
-    limit_price=5.00,
-    asset_class=AssetClass.OPTION,
-    contract_type=ContractType.CALL,
-    strike_price=Decimal("150"),
-    expiration_date=date(2025, 3, 21),
-    underlying_symbol="AAPL",
-)
-result = await adapter.submit_option_order(order)
-```
-
-**Multi-Leg Order:**
-```python
-from trading_platform.core.models import MultiLegOrder
-
-multileg = MultiLegOrder(
-    legs=[long_leg, short_leg],
-    strategy_type="VERTICAL_SPREAD",
-    net_debit_or_credit=Decimal("2.50"),
-)
-result = await adapter.submit_multileg_order(multileg)
-```
-
-**Additional Methods:**
-- `get_option_positions()` — Current options positions
-- `get_option_chain(underlying)` — Available options for a symbol
-- `get_option_expirations(underlying)` — Available expiration dates
-- `preflight_option_order(order)` — Cost estimation
-
----
-
-## Order Router
-
-`trading_platform.core.order_router.OrderRouter`
-
-The OrderRouter dispatches orders to the correct execution adapter based on asset class.
-
-```python
-from trading_platform.core.order_router import OrderRouter
-from trading_platform.core.enums import AssetClass
-
-router = OrderRouter()
-router.register(AssetClass.EQUITY, equity_adapter)
-router.register(AssetClass.OPTION, options_adapter)
-router.register(AssetClass.CRYPTO, crypto_adapter)
-
-# Orders are routed by their asset_class field
-await router.submit_order(equity_order)   # → equity_adapter
-await router.submit_order(crypto_order)   # → crypto_adapter
-await router.submit_multileg_order(spread) # → options_adapter
-```

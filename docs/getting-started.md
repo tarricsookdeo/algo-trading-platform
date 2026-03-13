@@ -3,7 +3,8 @@
 ## Prerequisites
 
 - **Python 3.12+**
-- **Public.com account** with API access (for order execution) — optional for data-only mode
+- **Public.com account** with API access (for equity/options execution) — optional for data-only mode
+- **Crypto exchange account** with API access (for crypto trading) — optional
 - **pip** or a Python package manager
 
 ## Installation
@@ -35,10 +36,6 @@ This installs the platform package (`trading_platform`) along with all dependenc
 
 Dev dependencies: `pytest`, `pytest-asyncio`.
 
-
-```bash
-```
-
 ## Configuration
 
 ### 3. Set Up Environment Variables
@@ -50,10 +47,20 @@ cp .env.example .env
 Edit `.env` with your credentials:
 
 ```bash
-# Required for order execution (optional — platform runs without these)
+# Equity/Options execution (optional — platform runs without these)
 PUBLIC_API_SECRET=your_public_api_secret
 PUBLIC_ACCOUNT_ID=your_public_account_id
+
+# Crypto execution (optional — activates CryptoExecAdapter)
+CRYPTO_API_SECRET=your_crypto_api_secret
+CRYPTO_ACCOUNT_ID=your_crypto_account_id
+
+# Options execution (optional — use if separate from Public.com)
+OPTIONS_API_SECRET=your_options_api_secret
+OPTIONS_ACCOUNT_ID=your_options_account_id
 ```
+
+Each adapter activates independently when its credentials are present. You can run any combination of equity, crypto, and options execution.
 
 > **Security**: Never commit `.env` to version control. It's already in `.gitignore`.
 
@@ -77,6 +84,22 @@ port = 8080
 max_position_size = 1000.0
 max_order_value = 50000.0
 daily_loss_limit = -5000.0
+
+# Optional: Crypto trading pairs
+[crypto]
+trading_pairs = ["BTC-USD", "ETH-USD"]
+
+# Optional: Options expiration management
+[expiration]
+auto_close_dte = 1
+alert_dte = 7
+
+# Optional: Greeks risk limits for options
+[risk.greeks]
+max_portfolio_delta = 500.0
+max_portfolio_gamma = 100.0
+max_daily_theta = -200.0
+max_portfolio_vega = 1000.0
 ```
 
 See [Configuration Reference](configuration.md) for all options.
@@ -117,21 +140,26 @@ On startup you'll see:
 [info] starting platform  dashboard_port=8080
 [info] data manager started  providers=1
 [info] public.com exec adapter configured
-[info] order router configured  adapters=equity,options,crypto
-[info] greeks provider initialized  refresh_interval=30s
-[info] expiration manager started  auto_close_dte=1
-[info] trailing stop manager ready
-[info] scaled order manager ready
+[info] crypto exec adapter configured
+[info] options exec adapter configured
+[info] order router registered  adapters=["stock", "crypto", "option"]
 [info] risk manager initialized
+[info] greeks provider initialized
+[info] expiration manager started
+[info] bracket order manager events wired
+[info] trailing stop manager events wired
+[info] scaled order manager events wired
 [info] strategy manager initialized
 [info] strategy manager events wired
 [info] platform ready  dashboard=http://0.0.0.0:8080
 ```
 
-If Public.com credentials are not set, the platform runs in **data-only mode**:
+Adapters activate independently based on available credentials:
 
 ```
 [info] public.com exec adapter skipped (no credentials)
+[info] crypto exec adapter skipped (no credentials)
+[info] options exec adapter skipped (no credentials)
 ```
 
 ### 6. Access the Dashboard
@@ -146,12 +174,6 @@ The dashboard displays:
 - **Orders** — Active orders with cancel capability
 - **Strategies** — Registered strategies with start/stop controls
 - **Risk** — Current risk state and violation history
-- **Bracket orders** — Active brackets with state machine and P&L
-- **Trailing stops** — Dynamic stop levels with trail visualization
-- **Scaled orders** — Multi-tranche entry/exit progress
-- **Options greeks** — Portfolio delta, gamma, theta, vega
-- **Expiration countdown** — DTE monitoring for options positions
-- **Crypto positions** — Holdings with fractional quantities
 
 ### 7. Verify Data Ingestion
 
@@ -193,6 +215,36 @@ curl http://localhost:8080/api/status
 curl http://localhost:8080/api/portfolio
 ```
 
+**Check trailing stops:**
+
+```bash
+curl http://localhost:8080/api/trailing-stops
+```
+
+**Check scaled orders:**
+
+```bash
+curl http://localhost:8080/api/scaled-orders
+```
+
+**Check bracket orders:**
+
+```bash
+curl http://localhost:8080/api/brackets
+```
+
+**Check portfolio greeks (when options adapter is connected):**
+
+```bash
+curl http://localhost:8080/api/options/portfolio-greeks
+```
+
+**Check option expirations:**
+
+```bash
+curl http://localhost:8080/api/options/expirations
+```
+
 ## Running Tests
 
 ```bash
@@ -205,14 +257,14 @@ Tests cover:
 - DataManager provider registration and streaming
 - CSV bar provider loading and replay
 - REST and WebSocket data ingestion
-- Public.com adapter integration
-- Crypto adapter integration
-- Options order model and adapter
-- Trailing stops and scaled orders
-- Greeks risk checks
-- Expiration management
+- Public.com, crypto, and options adapter integration
+- Order routing across asset classes
+- Bracket orders, trailing stops, and scaled orders
+- Options strategy builder and validator
+- Greeks provider caching and aggregation
+- Expiration management and auto-close
 - Strategy lifecycle and manager
-- Risk checks and violations
+- Risk checks, greeks risk checks, and violations
 - Dashboard API endpoints
 
 ## Stopping the Platform
@@ -220,21 +272,19 @@ Tests cover:
 Press `Ctrl+C` for graceful shutdown. The platform will:
 
 1. Stop all active strategies
-2. Unwire event subscriptions
-3. Close WebSocket connections
-4. Disconnect from Public.com
-5. Stop DataManager and disconnect all providers
-6. Stop the dashboard server
+2. Unwire event subscriptions (strategies, brackets, trailing stops, scaled orders)
+3. Stop expiration manager
+4. Close WebSocket connections
+5. Disconnect all execution adapters (equity, crypto, options) via OrderRouter
+6. Stop DataManager and disconnect all providers
+7. Stop the dashboard server
 
 ## Next Steps
 
-- [Configuration Reference](configuration.md) — Tune all settings
-- [Data Providers & Adapters](adapters.md) — Bring your own data sources
+- [Configuration Reference](configuration.md) — Tune all settings including crypto, options, and greeks limits
+- [Data Providers & Adapters](adapters.md) — Bring your own data sources, set up crypto and options execution
 - [Strategies Guide](strategies.md) — Write your first trading strategy
-- [Risk Management](risk-management.md) — Configure risk controls
-- [Crypto Trading](crypto-trading.md) — Trade crypto via Public.com
-- [Options Trading](options-trading.md) — Options orders and multi-leg strategies
-- [Trailing Stops](trailing-stops.md) — Dynamic trailing stop orders
-- [Scaled Orders](scaled-orders.md) — Multi-tranche entries and exits
-- [Greeks & Risk](greeks-risk.md) — Greeks-aware risk management
-- [Expiration Management](expiration-management.md) — DTE monitoring and auto-close
+- [Risk Management](risk-management.md) — Configure risk controls and greeks-aware checks
+- [Dashboard Guide](dashboard.md) — Explore all REST and WebSocket endpoints
+- [Event Bus Reference](event-bus.md) — Channels, payloads, and subscription patterns
+- [API Reference](api-reference.md) — All public classes and methods
