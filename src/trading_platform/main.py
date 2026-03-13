@@ -16,6 +16,8 @@ import uvicorn
 
 from trading_platform.adapters.crypto.adapter import CryptoExecAdapter
 from trading_platform.adapters.crypto.config import CryptoConfig
+from trading_platform.adapters.options.adapter import OptionsExecAdapter
+from trading_platform.adapters.options.config import OptionsConfig
 from trading_platform.adapters.public_com.adapter import PublicComExecAdapter
 from trading_platform.adapters.public_com.config import PublicComConfig
 from trading_platform.bracket.manager import BracketOrderManager
@@ -100,6 +102,8 @@ async def run(args: argparse.Namespace) -> None:
     equity_adapter: PublicComExecAdapter | None = None
     crypto_adapter: CryptoExecAdapter | None = None
 
+    options_adapter: OptionsExecAdapter | None = None
+
     if settings.public_com.api_secret and settings.public_com.account_id:
         public_config = PublicComConfig(
             api_secret=settings.public_com.api_secret,
@@ -109,8 +113,18 @@ async def run(args: argparse.Namespace) -> None:
         )
         equity_adapter = PublicComExecAdapter(public_config, event_bus)
         order_router.register(AssetClass.EQUITY, equity_adapter)
-        order_router.register(AssetClass.OPTION, equity_adapter)
         log.info("public.com equity adapter configured")
+
+        # Register dedicated options adapter (shares credentials with equity)
+        opts_cfg = OptionsConfig(
+            api_secret=settings.public_com.api_secret,
+            account_id=settings.public_com.account_id,
+            poll_interval=settings.options.poll_interval,
+            portfolio_refresh=settings.options.portfolio_refresh,
+        )
+        options_adapter = OptionsExecAdapter(opts_cfg, event_bus)
+        order_router.register(AssetClass.OPTION, options_adapter)
+        log.info("options adapter configured")
     else:
         log.info("public.com equity adapter skipped (no credentials)")
 

@@ -53,6 +53,11 @@ class CryptoSettings(BaseSettings):
     portfolio_refresh: float = 30.0
 
 
+class OptionsSettings(BaseSettings):
+    poll_interval: float = 2.0
+    portfolio_refresh: float = 30.0
+
+
 class PlatformSettings(BaseSettings):
     log_level: str = "INFO"
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"])
@@ -62,6 +67,7 @@ class Settings(BaseSettings):
     data: DataSettings = Field(default_factory=DataSettings)
     public_com: PublicComSettings = Field(default_factory=PublicComSettings)
     crypto: CryptoSettings = Field(default_factory=CryptoSettings)
+    options: OptionsSettings = Field(default_factory=OptionsSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     platform: PlatformSettings = Field(default_factory=PlatformSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
@@ -98,8 +104,11 @@ def load_settings(config_path: Path | None = None) -> Settings:
     platform_data = toml_data.get("platform", {})
     risk_data = toml_data.get("risk", {})
 
+    options_data = toml_data.get("options", {})
+
     public_com = PublicComSettings(**public_com_data)
     crypto = CryptoSettings(**crypto_data)
+    options = OptionsSettings(**options_data)
     dashboard = DashboardSettings(**dashboard_data)
     platform_cfg = PlatformSettings(**platform_data)
     risk = RiskSettings(**risk_data)
@@ -108,6 +117,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         data=data_cfg,
         public_com=public_com,
         crypto=crypto,
+        options=options,
         dashboard=dashboard,
         platform=platform_cfg,
         risk=risk,

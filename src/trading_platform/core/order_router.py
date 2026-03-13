@@ -7,7 +7,7 @@ from typing import Any
 from trading_platform.adapters.base import ExecAdapter
 from trading_platform.core.enums import AssetClass
 from trading_platform.core.logging import get_logger
-from trading_platform.core.models import Order
+from trading_platform.core.models import MultiLegOrder, Order
 
 
 class OrderRouter(ExecAdapter):
@@ -72,3 +72,42 @@ class OrderRouter(ExecAdapter):
         for ac, adapter in self._adapters.items():
             accounts[str(ac)] = await adapter.get_account()
         return accounts
+
+    # ── Options-specific routing ─────────────────────────────────────
+
+    def _get_options_adapter(self) -> Any:
+        """Return the OPTION adapter, raising if not registered."""
+        adapter = self._adapters.get(AssetClass.OPTION)
+        if not adapter:
+            raise ValueError("No adapter registered for asset class 'option'")
+        return adapter
+
+    async def submit_multileg_order(self, multileg: MultiLegOrder) -> Any:
+        """Route a multi-leg order to the options adapter."""
+        adapter = self._get_options_adapter()
+        return await adapter.submit_multileg_order(multileg)
+
+    async def cancel_option_order(self, order_id: str) -> Any:
+        """Cancel an option order via the options adapter."""
+        adapter = self._get_options_adapter()
+        return await adapter.cancel_option_order(order_id)
+
+    async def get_option_positions(self) -> list[Any]:
+        """Get option positions from the options adapter."""
+        adapter = self._get_options_adapter()
+        return await adapter.get_option_positions()
+
+    async def preflight_option_order(self, order: Order) -> Any:
+        """Preflight check for a single-leg option order."""
+        adapter = self._get_options_adapter()
+        return await adapter.preflight_option_order(order)
+
+    async def get_option_chain(self, underlying: str) -> Any:
+        """Fetch option chain for an underlying symbol."""
+        adapter = self._get_options_adapter()
+        return await adapter.get_option_chain(underlying)
+
+    async def get_option_expirations(self, underlying: str) -> Any:
+        """Fetch available expirations for an underlying symbol."""
+        adapter = self._get_options_adapter()
+        return await adapter.get_option_expirations(underlying)

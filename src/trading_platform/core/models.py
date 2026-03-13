@@ -6,13 +6,20 @@ never adapter-specific types.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from trading_platform.core.enums import AssetClass, BarType, OrderSide, OrderStatus, OrderType
+from trading_platform.core.enums import (
+    AssetClass,
+    BarType,
+    ContractType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
 
 
 class QuoteTick(BaseModel):
@@ -111,6 +118,52 @@ class Order(BaseModel):
     asset_class: AssetClass = AssetClass.EQUITY
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Options-specific fields (required when asset_class is OPTION)
+    contract_type: ContractType | None = None
+    strike_price: Decimal | None = None
+    expiration_date: date | None = None
+    underlying_symbol: str | None = None
+    option_symbol: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_option_fields(self) -> Order:
+        if self.asset_class == AssetClass.OPTION:
+            missing = []
+            if self.contract_type is None:
+                missing.append("contract_type")
+            if self.strike_price is None:
+                missing.append("strike_price")
+            if self.expiration_date is None:
+                missing.append("expiration_date")
+            if not self.underlying_symbol:
+                missing.append("underlying_symbol")
+            if missing:
+                raise ValueError(
+                    f"Options orders require: {', '.join(missing)}"
+                )
+        return self
+
+
+class MultiLegOrder(BaseModel):
+    """Multi-leg options order (e.g., spreads, iron condors)."""
+    id: str = ""
+    legs: list[Order] = Field(default_factory=list)
+    strategy_type: str = ""
+    net_debit_or_credit: Decimal | None = None
+    status: OrderStatus = OrderStatus.NEW
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _validate_legs(self) -> MultiLegOrder:
+        if not self.legs:
+            raise ValueError("MultiLegOrder requires at least one leg")
+        for i, leg in enumerate(self.legs):
+            if leg.asset_class != AssetClass.OPTION:
+                raise ValueError(
+                    f"Leg {i} must have asset_class OPTION, got {leg.asset_class}"
+                )
+        return self
 
 
 class Fill(BaseModel):
