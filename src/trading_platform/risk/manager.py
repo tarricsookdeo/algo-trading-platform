@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from trading_platform.core.enums import AssetClass
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
 from trading_platform.core.models import Order, Position
@@ -33,6 +34,14 @@ class RiskManager:
         self._bus = event_bus
         self._log = get_logger("risk.manager")
         self.state = RiskState()
+        # Optional greeks risk components (set via register_greeks_checks)
+        self._greeks_provider: Any | None = None
+        self._greeks_config: Any | None = None
+
+    def register_greeks_checks(self, provider: Any, greeks_config: Any) -> None:
+        """Register a GreeksProvider and GreeksRiskConfig for options checks."""
+        self._greeks_provider = provider
+        self._greeks_config = greeks_config
 
     async def pre_trade_check(self, order: Order, positions: list[Position]) -> tuple[bool, str]:
         """Run all pre-trade checks. Returns (passed, reason)."""
@@ -63,6 +72,70 @@ class RiskManager:
                     "reason": reason,
                 })
                 self._log.warning("pre-trade check failed", reason=reason, order_id=order.order_id)
+                return False, reason
+
+        # Run greeks checks for options orders when configured
+        if (
+            self._greeks_provider is not None
+            and self._greeks_config is not None
+            and order.asset_class == AssetClass.OPTION
+        ):
+            greeks_result = await self._run_greeks_checks(order, positions)
+            if not greeks_result[0]:
+                return greeks_result
+
+        return True, ""
+
+    async def _run_greeks_checks(
+        self, order: Order, positions: list[Position]
+    ) -> tuple[bool, str]:
+        """Run all configured greeks risk checks."""
+        from trading_platform.risk.greeks_checks import (
+            check_portfolio_delta,
+            check_portfolio_gamma,
+            check_single_position_greeks,
+            check_theta_decay,
+            check_vega_exposure,
+        )
+
+        provider = self._greeks_provider
+        config = self._greeks_config
+
+        # Filter to positions with symbol and quantity
+        option_positions = [
+            p for p in positions if p.symbol and p.quantity
+        ]
+
+        # Build check callables to avoid eagerly creating coroutines
+        # (unawaited coroutines trigger RuntimeWarning on early-exit)
+        checks = [
+            lambda: check_portfolio_delta(provider, option_positions, config),
+            lambda: check_portfolio_gamma(provider, option_positions, config),
+            lambda: check_theta_decay(provider, option_positions, config),
+            lambda: check_vega_exposure(provider, option_positions, config),
+            lambda: check_single_position_greeks(provider, order, config),
+        ]
+
+        for check_fn in checks:
+            passed, reason = await check_fn()
+            if not passed:
+                violation = RiskViolation(
+                    check_name="greeks",
+                    message=reason,
+                    order_id=order.order_id,
+                    symbol=order.symbol,
+                    timestamp=datetime.now(UTC),
+                )
+                self.state.violations.append(violation)
+                await self._bus.publish("risk.check.failed", {
+                    "order_id": order.order_id,
+                    "reason": reason,
+                })
+                self._log.warning(
+                    "greeks risk check failed",
+                    reason=reason,
+                    order_id=order.order_id,
+                )
                 return False, reason
 
         return True, ""

@@ -33,6 +33,14 @@ class PublicComSettings(BaseSettings):
     portfolio_refresh: float = 30.0
 
 
+class GreeksRiskSettings(BaseSettings):
+    max_portfolio_delta: float = 500.0
+    max_portfolio_gamma: float = 100.0
+    max_daily_theta: float = -200.0
+    max_portfolio_vega: float = 1000.0
+    greeks_refresh_interval_seconds: float = 30.0
+
+
 class RiskSettings(BaseSettings):
     max_position_size: float = 1000.0
     max_position_concentration: float = 0.10
@@ -43,6 +51,7 @@ class RiskSettings(BaseSettings):
     max_portfolio_drawdown: float = 0.15
     allowed_symbols: list[str] = Field(default_factory=list)
     blocked_symbols: list[str] = Field(default_factory=list)
+    greeks: GreeksRiskSettings = Field(default_factory=GreeksRiskSettings)
 
 
 class CryptoSettings(BaseSettings):
@@ -53,9 +62,18 @@ class CryptoSettings(BaseSettings):
     portfolio_refresh: float = 30.0
 
 
+class ExpirationSettings(BaseSettings):
+    auto_close_dte: int = 1
+    alert_dte: int = 7
+    roll_enabled: bool = False
+    roll_target_dte: int = 30
+    check_interval_seconds: float = 60.0
+
+
 class OptionsSettings(BaseSettings):
     poll_interval: float = 2.0
     portfolio_refresh: float = 30.0
+    expiration: ExpirationSettings = Field(default_factory=ExpirationSettings)
 
 
 class PlatformSettings(BaseSettings):
@@ -102,16 +120,23 @@ def load_settings(config_path: Path | None = None) -> Settings:
     crypto_data = toml_data.get("crypto", {})
     dashboard_data = toml_data.get("dashboard", {})
     platform_data = toml_data.get("platform", {})
-    risk_data = toml_data.get("risk", {})
+    risk_data = dict(toml_data.get("risk", {}))
 
-    options_data = toml_data.get("options", {})
+    options_data = dict(toml_data.get("options", {}))
+
+    # Handle nested TOML sections: [risk.greeks] and [options.expiration]
+    greeks_data = risk_data.pop("greeks", {})
+    greeks_settings = GreeksRiskSettings(**greeks_data)
+
+    expiration_data = options_data.pop("expiration", {})
+    expiration_settings = ExpirationSettings(**expiration_data)
 
     public_com = PublicComSettings(**public_com_data)
     crypto = CryptoSettings(**crypto_data)
-    options = OptionsSettings(**options_data)
+    options = OptionsSettings(**options_data, expiration=expiration_settings)
     dashboard = DashboardSettings(**dashboard_data)
     platform_cfg = PlatformSettings(**platform_data)
-    risk = RiskSettings(**risk_data)
+    risk = RiskSettings(**risk_data, greeks=greeks_settings)
 
     return Settings(
         data=data_cfg,

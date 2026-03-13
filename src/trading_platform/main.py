@@ -31,6 +31,9 @@ from trading_platform.dashboard.ws import DashboardWSManager
 from trading_platform.data.config import DataConfig
 from trading_platform.data.file_provider import CsvBarProvider
 from trading_platform.data.manager import DataManager
+from trading_platform.options.expiration import ExpirationConfig, ExpirationManager
+from trading_platform.options.greeks import GreeksProvider
+from trading_platform.risk.greeks_checks import GreeksRiskConfig
 from trading_platform.risk.manager import RiskManager
 from trading_platform.risk.models import RiskConfig
 from trading_platform.strategy.manager import StrategyManager
@@ -160,6 +163,37 @@ async def run(args: argparse.Namespace) -> None:
     risk_manager = RiskManager(risk_config, event_bus)
     log.info("risk manager initialized")
 
+    # ── Greeks-Aware Risk (optional, requires options adapter) ────────
+    greeks_provider: GreeksProvider | None = None
+    if options_adapter is not None:
+        greeks_provider = GreeksProvider(
+            client=options_adapter,
+            refresh_interval=settings.risk.greeks.greeks_refresh_interval_seconds,
+        )
+        greeks_risk_cfg = GreeksRiskConfig(
+            max_portfolio_delta=settings.risk.greeks.max_portfolio_delta,
+            max_portfolio_gamma=settings.risk.greeks.max_portfolio_gamma,
+            max_daily_theta=settings.risk.greeks.max_daily_theta,
+            max_portfolio_vega=settings.risk.greeks.max_portfolio_vega,
+        )
+        risk_manager.register_greeks_checks(greeks_provider, greeks_risk_cfg)
+        log.info("greeks-aware risk checks registered")
+
+    # ── Expiration Manager ─────────────────────────────────────────────
+    expiration_config = ExpirationConfig(
+        auto_close_dte=settings.options.expiration.auto_close_dte,
+        alert_dte=settings.options.expiration.alert_dte,
+        roll_enabled=settings.options.expiration.roll_enabled,
+        roll_target_dte=settings.options.expiration.roll_target_dte,
+        check_interval_seconds=settings.options.expiration.check_interval_seconds,
+    )
+    expiration_manager = ExpirationManager(
+        config=expiration_config,
+        event_bus=event_bus,
+        exec_adapter=options_adapter,
+    )
+    log.info("expiration manager initialized")
+
     # ── Bracket Order Manager ─────────────────────────────────────────
     bracket_manager = BracketOrderManager(event_bus=event_bus, exec_adapter=exec_adapter)
     log.info("bracket order manager initialized")
@@ -203,6 +237,10 @@ async def run(args: argparse.Namespace) -> None:
             await exec_adapter.connect()
             log.info("exec adapters connected")
 
+        # Start expiration manager
+        await expiration_manager.start()
+        log.info("expiration manager started")
+
         # Wire bracket and strategy manager events
         await bracket_manager.wire_events()
         log.info("bracket order manager events wired")
@@ -241,6 +279,7 @@ async def run(args: argparse.Namespace) -> None:
 
     finally:
         log.info("shutting down platform")
+        await expiration_manager.stop()
         await strategy_manager.stop_all()
         await strategy_manager.unwire_events()
         await bracket_manager.unwire_events()

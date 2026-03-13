@@ -19,6 +19,13 @@ max_portfolio_drawdown = 0.15
 allowed_symbols = []
 blocked_symbols = []
 
+[risk.greeks]
+max_portfolio_delta = 500.0
+max_portfolio_gamma = 100.0
+max_daily_theta = -200.0
+max_portfolio_vega = 1000.0
+greeks_refresh_interval_seconds = 30
+
 [crypto]
 trading_pairs = ["BTC-USD", "ETH-USD"]
 poll_interval = 2.0
@@ -27,6 +34,13 @@ portfolio_refresh = 30.0
 [options]
 poll_interval = 2.0
 portfolio_refresh = 30.0
+
+[options.expiration]
+auto_close_dte = 1
+alert_dte = 7
+roll_enabled = false
+roll_target_dte = 30
+check_interval_seconds = 60
 
 [dashboard]
 host = "0.0.0.0"

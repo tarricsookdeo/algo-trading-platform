@@ -54,3 +54,6 @@ class Channel(StrEnum):
     POSITION = "position"
     SYSTEM = "system"
     ERROR = "error"
+    EXPIRATION_WARNING = "options.expiration.warning"
+    POSITION_AUTO_CLOSED = "options.position.auto_closed"
+    POSITION_ROLLED = "options.position.rolled"
