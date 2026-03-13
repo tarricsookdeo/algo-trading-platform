@@ -22,6 +22,16 @@ class BracketOrder(BaseModel):
     stop_loss_price: Decimal
     take_profit_price: Decimal
 
+    # Trailing stop parameters (optional — replaces fixed stop-loss)
+    trailing_stop: bool = False
+    trail_amount: Decimal | None = None
+    trail_percent: Decimal | None = None
+    trailing_stop_id: str | None = None
+
+    # Scaled exit parameters (optional — replaces single take-profit)
+    take_profit_levels: list[tuple[Decimal, Decimal]] | None = None
+    scaled_order_id: str | None = None
+
     # State tracking
     state: BracketState = BracketState.PENDING_ENTRY
 

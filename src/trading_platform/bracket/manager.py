@@ -20,6 +20,26 @@ from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
 from trading_platform.core.models import Order, QuoteTick
 
+# Lazy imports to avoid circular dependencies
+_trailing_stop_manager_cls = None
+_scaled_order_manager_cls = None
+
+
+def _get_trailing_stop_manager_cls():
+    global _trailing_stop_manager_cls
+    if _trailing_stop_manager_cls is None:
+        from trading_platform.orders.trailing_stop import TrailingStopManager
+        _trailing_stop_manager_cls = TrailingStopManager
+    return _trailing_stop_manager_cls
+
+
+def _get_scaled_order_manager_cls():
+    global _scaled_order_manager_cls
+    if _scaled_order_manager_cls is None:
+        from trading_platform.orders.scaled import ScaledOrderManager
+        _scaled_order_manager_cls = ScaledOrderManager
+    return _scaled_order_manager_cls
+
 
 class BracketOrderManager:
     """Manages the lifecycle of synthetic bracket orders.
@@ -39,6 +59,13 @@ class BracketOrderManager:
         self._tp_to_bracket: dict[str, str] = {}
         # Symbols being monitored for take-profit
         self._monitored_symbols: set[str] = set()
+        # Sub-managers for trailing stops and scaled orders (created on demand)
+        self._trailing_stop_mgr = None
+        self._scaled_order_mgr = None
+        # Trailing stop ID → bracket ID mapping
+        self._trailing_to_bracket: dict[str, str] = {}
+        # Scaled order ID → bracket ID mapping
+        self._scaled_to_bracket: dict[str, str] = {}
 
     # ── Public API ─────────────────────────────────────────────────────
 
@@ -50,6 +77,10 @@ class BracketOrderManager:
         stop_loss_price: Decimal,
         take_profit_price: Decimal,
         entry_limit_price: Decimal | None = None,
+        trailing_stop: bool = False,
+        trail_amount: Decimal | None = None,
+        trail_percent: Decimal | None = None,
+        take_profit_levels: list[tuple[Decimal, Decimal]] | None = None,
     ) -> BracketOrder:
         """Submit a new bracket order.
 
@@ -60,6 +91,10 @@ class BracketOrderManager:
             stop_loss_price: Price for resting stop-loss order.
             take_profit_price: Bid price level that triggers take-profit.
             entry_limit_price: Required if entry_type is LIMIT.
+            trailing_stop: If True, use trailing stop instead of fixed stop-loss.
+            trail_amount: Absolute dollar trail for trailing stop.
+            trail_percent: Percentage trail for trailing stop.
+            take_profit_levels: List of (price, quantity_percent) tuples for scaled exits.
 
         Returns:
             The created BracketOrder instance.
@@ -84,6 +119,19 @@ class BracketOrderManager:
         if quantity <= 0:
             raise ValueError("quantity must be positive")
 
+        # Validate trailing stop params
+        if trailing_stop:
+            if trail_amount is None and trail_percent is None:
+                raise ValueError("trailing_stop requires trail_amount or trail_percent")
+            if trail_amount is not None and trail_percent is not None:
+                raise ValueError("Cannot specify both trail_amount and trail_percent")
+
+        # Validate scaled exit params
+        if take_profit_levels is not None:
+            total_pct = sum(pct for _, pct in take_profit_levels)
+            if abs(total_pct - Decimal("1")) > Decimal("0.001"):
+                raise ValueError("take_profit_levels percentages must sum to 1.0")
+
         bracket_id = str(uuid.uuid4())
         bracket = BracketOrder(
             bracket_id=bracket_id,
@@ -93,6 +141,10 @@ class BracketOrderManager:
             entry_limit_price=entry_limit_price,
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
+            trailing_stop=trailing_stop,
+            trail_amount=trail_amount,
+            trail_percent=trail_percent,
+            take_profit_levels=take_profit_levels,
         )
         self._brackets[bracket_id] = bracket
 
@@ -124,11 +176,24 @@ class BracketOrderManager:
             except Exception as exc:
                 self._log.warning("failed to cancel entry order", bracket_id=bracket_id, error=str(exc))
 
-        if bracket.state in (BracketState.STOP_LOSS_PLACED, BracketState.MONITORING) and bracket.stop_loss_order_id:
-            try:
-                await self._exec.cancel_order(bracket.stop_loss_order_id)
-            except Exception as exc:
-                self._log.warning("failed to cancel stop-loss order", bracket_id=bracket_id, error=str(exc))
+        if bracket.state in (BracketState.STOP_LOSS_PLACED, BracketState.MONITORING):
+            # Cancel trailing stop if active
+            if bracket.trailing_stop and bracket.trailing_stop_id and self._trailing_stop_mgr:
+                try:
+                    await self._trailing_stop_mgr.cancel_trailing_stop(bracket.trailing_stop_id)
+                except Exception as exc:
+                    self._log.warning("failed to cancel trailing stop", bracket_id=bracket_id, error=str(exc))
+            elif bracket.stop_loss_order_id:
+                try:
+                    await self._exec.cancel_order(bracket.stop_loss_order_id)
+                except Exception as exc:
+                    self._log.warning("failed to cancel stop-loss order", bracket_id=bracket_id, error=str(exc))
+            # Cancel scaled exits if active
+            if bracket.scaled_order_id and self._scaled_order_mgr:
+                try:
+                    await self._scaled_order_mgr.cancel_scaled_order(bracket.scaled_order_id)
+                except Exception as exc:
+                    self._log.warning("failed to cancel scaled exits", bracket_id=bracket_id, error=str(exc))
 
         await self._transition(bracket, BracketState.CANCELED)
         return True
@@ -142,6 +207,9 @@ class BracketOrderManager:
         await self._bus.subscribe("execution.order.rejected", self._on_order_rejected)
         await self._bus.subscribe("execution.order.partially_filled", self._on_order_partially_filled)
         await self._bus.subscribe("quote", self._on_quote)
+        await self._bus.subscribe("trailing_stop.filled", self._on_trailing_stop_filled)
+        await self._bus.subscribe("scaled_exit.completed", self._on_scaled_exit_completed)
+        await self._bus.subscribe("scaled_exit.tranche_filled", self._on_scaled_tranche_filled)
 
     async def unwire_events(self) -> None:
         """Unsubscribe from event bus channels."""
@@ -150,6 +218,14 @@ class BracketOrderManager:
         await self._bus.unsubscribe("execution.order.rejected", self._on_order_rejected)
         await self._bus.unsubscribe("execution.order.partially_filled", self._on_order_partially_filled)
         await self._bus.unsubscribe("quote", self._on_quote)
+        await self._bus.unsubscribe("trailing_stop.filled", self._on_trailing_stop_filled)
+        await self._bus.unsubscribe("scaled_exit.completed", self._on_scaled_exit_completed)
+        await self._bus.unsubscribe("scaled_exit.tranche_filled", self._on_scaled_tranche_filled)
+        # Clean up sub-managers
+        if self._trailing_stop_mgr:
+            await self._trailing_stop_mgr.unwire_events()
+        if self._scaled_order_mgr:
+            await self._scaled_order_mgr.unwire_events()
 
     # ── Event Handlers ─────────────────────────────────────────────────
 
@@ -267,8 +343,72 @@ class BracketOrderManager:
         # Intentionally no-op: we only act on full fill
         pass
 
+    async def _on_trailing_stop_filled(self, channel: str, event: Any) -> None:
+        """Handle trailing stop fill → bracket is stopped out."""
+        if not isinstance(event, dict):
+            return
+        trailing_stop_id = event.get("trailing_stop_id")
+        if not trailing_stop_id or trailing_stop_id not in self._trailing_to_bracket:
+            return
+        bracket_id = self._trailing_to_bracket[trailing_stop_id]
+        bracket = self._brackets.get(bracket_id)
+        if not bracket or bracket.state in TERMINAL_STATES:
+            return
+
+        fill_price = event.get("fill_price")
+        if fill_price is not None:
+            bracket.exit_fill_price = Decimal(str(fill_price))
+        await self._transition(bracket, BracketState.STOPPED_OUT)
+        self._monitored_symbols.discard(bracket.symbol)
+        await self._bus.publish(BracketChannel.BRACKET_STOPPED_OUT, {
+            "bracket_id": bracket_id,
+            "symbol": bracket.symbol,
+            "exit_price": str(bracket.exit_fill_price),
+            "trailing": True,
+        })
+
+    async def _on_scaled_exit_completed(self, channel: str, event: Any) -> None:
+        """Handle all scaled exit tranches filled → bracket take-profit complete."""
+        if not isinstance(event, dict):
+            return
+        scaled_order_id = event.get("scaled_order_id")
+        if not scaled_order_id or scaled_order_id not in self._scaled_to_bracket:
+            return
+        bracket_id = self._scaled_to_bracket[scaled_order_id]
+        bracket = self._brackets.get(bracket_id)
+        if not bracket or bracket.state in TERMINAL_STATES:
+            return
+
+        await self._transition(bracket, BracketState.TAKE_PROFIT_FILLED)
+        self._monitored_symbols.discard(bracket.symbol)
+        await self._bus.publish(BracketChannel.BRACKET_TAKE_PROFIT_FILLED, {
+            "bracket_id": bracket_id,
+            "symbol": bracket.symbol,
+            "scaled": True,
+        })
+
+    async def _on_scaled_tranche_filled(self, channel: str, event: Any) -> None:
+        """Handle a single scaled exit tranche fill — update stop-loss quantity."""
+        if not isinstance(event, dict):
+            return
+        scaled_order_id = event.get("scaled_order_id")
+        if not scaled_order_id or scaled_order_id not in self._scaled_to_bracket:
+            return
+        # Tranche fills are handled by ScaledOrderManager — it adjusts the stop quantity.
+        # We just log for visibility.
+        bracket_id = self._scaled_to_bracket[scaled_order_id]
+        self._log.info(
+            "scaled tranche filled for bracket",
+            bracket_id=bracket_id,
+            remaining_quantity=event.get("remaining_quantity"),
+        )
+
     async def _on_quote(self, channel: str, event: Any) -> None:
-        """Monitor bid prices for take-profit triggers."""
+        """Monitor bid prices for take-profit triggers.
+
+        Brackets with scaled exits (take_profit_levels) are handled by
+        ScaledOrderManager — this method only triggers single-level take-profits.
+        """
         if isinstance(event, QuoteTick):
             symbol = event.symbol
             bid_price = Decimal(str(event.bid_price))
@@ -286,6 +426,7 @@ class BracketOrderManager:
                 bracket.symbol == symbol
                 and bracket.state == BracketState.MONITORING
                 and bid_price >= bracket.take_profit_price
+                and not bracket.take_profit_levels  # Scaled exits are handled separately
             ):
                 self._log.info(
                     "take-profit triggered",
@@ -322,7 +463,14 @@ class BracketOrderManager:
             })
 
     async def _place_stop_loss(self, bracket: BracketOrder) -> None:
-        """Place the resting stop-loss order after entry fill."""
+        """Place the resting stop-loss order after entry fill.
+
+        If trailing_stop is enabled, delegates to TrailingStopManager instead.
+        """
+        if bracket.trailing_stop:
+            await self._place_trailing_stop(bracket)
+            return
+
         stop_order = Order(
             order_id=str(uuid.uuid4()),
             symbol=bracket.symbol,
@@ -342,9 +490,12 @@ class BracketOrderManager:
                 "stop_loss_order_id": stop_order.order_id,
                 "stop_loss_price": str(bracket.stop_loss_price),
             })
-            # Start monitoring for take-profit
+            # Start monitoring for take-profit (or scaled exits)
             self._monitored_symbols.add(bracket.symbol)
             await self._transition(bracket, BracketState.MONITORING)
+            # If scaled exits, set up the scaled order manager
+            if bracket.take_profit_levels:
+                await self._setup_scaled_exits(bracket)
         except Exception as exc:
             self._log.error(
                 "stop-loss placement failed — position unprotected!",
@@ -356,6 +507,82 @@ class BracketOrderManager:
                 "bracket_id": bracket.bracket_id,
                 "error": f"stop-loss placement failed: {exc}",
             })
+
+    async def _place_trailing_stop(self, bracket: BracketOrder) -> None:
+        """Place a trailing stop instead of a fixed stop-loss."""
+        TrailingStopManager = _get_trailing_stop_manager_cls()
+        if self._trailing_stop_mgr is None:
+            self._trailing_stop_mgr = TrailingStopManager(
+                event_bus=self._bus, exec_adapter=self._exec,
+            )
+            await self._trailing_stop_mgr.wire_events()
+
+        # Use entry fill price as the starting price for the trailing stop
+        current_price = bracket.entry_fill_price or bracket.stop_loss_price
+        try:
+            ts = await self._trailing_stop_mgr.create_trailing_stop(
+                symbol=bracket.symbol,
+                quantity=bracket.quantity,
+                current_price=current_price,
+                trail_amount=bracket.trail_amount,
+                trail_percent=bracket.trail_percent,
+            )
+            bracket.trailing_stop_id = ts.trailing_stop_id
+            bracket.stop_loss_order_id = ts.stop_order_id
+            self._trailing_to_bracket[ts.trailing_stop_id] = bracket.bracket_id
+            # Also track the stop order for fill detection
+            if ts.stop_order_id:
+                self._stop_to_bracket[ts.stop_order_id] = bracket.bracket_id
+
+            await self._transition(bracket, BracketState.STOP_LOSS_PLACED)
+            await self._bus.publish(BracketChannel.BRACKET_STOP_PLACED, {
+                "bracket_id": bracket.bracket_id,
+                "stop_loss_order_id": ts.stop_order_id,
+                "stop_loss_price": str(ts.current_stop_price),
+                "trailing": True,
+            })
+            self._monitored_symbols.add(bracket.symbol)
+            await self._transition(bracket, BracketState.MONITORING)
+            # If scaled exits, set up the scaled order manager
+            if bracket.take_profit_levels:
+                await self._setup_scaled_exits(bracket)
+        except Exception as exc:
+            self._log.error(
+                "trailing stop placement failed — position unprotected!",
+                bracket_id=bracket.bracket_id,
+                error=str(exc),
+            )
+            await self._transition(bracket, BracketState.ERROR)
+            await self._bus.publish(BracketChannel.BRACKET_ERROR, {
+                "bracket_id": bracket.bracket_id,
+                "error": f"trailing stop placement failed: {exc}",
+            })
+
+    async def _setup_scaled_exits(self, bracket: BracketOrder) -> None:
+        """Set up scaled exit monitoring for a bracket order."""
+        ScaledOrderManager = _get_scaled_order_manager_cls()
+        if self._scaled_order_mgr is None:
+            self._scaled_order_mgr = ScaledOrderManager(
+                event_bus=self._bus, exec_adapter=self._exec,
+            )
+            await self._scaled_order_mgr.wire_events()
+
+        try:
+            scaled = await self._scaled_order_mgr.create_scaled_exit(
+                symbol=bracket.symbol,
+                total_quantity=bracket.quantity,
+                levels=bracket.take_profit_levels,
+                stop_loss_order_id=bracket.stop_loss_order_id,
+                stop_loss_price=bracket.stop_loss_price,
+            )
+            bracket.scaled_order_id = scaled.scaled_order_id
+            self._scaled_to_bracket[scaled.scaled_order_id] = bracket.bracket_id
+        except Exception as exc:
+            self._log.error(
+                "scaled exit setup failed",
+                bracket_id=bracket.bracket_id,
+                error=str(exc),
+            )
 
     async def _trigger_take_profit(self, bracket: BracketOrder) -> None:
         """Trigger take-profit: cancel stop-loss, then place market sell."""
