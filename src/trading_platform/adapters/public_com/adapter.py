@@ -102,7 +102,7 @@ class PublicComExecAdapter(ExecAdapter):
                 "order_side": _SIDE_TO_SDK[order.side],
                 "order_type": _TYPE_TO_SDK[order.order_type],
                 "expiration": OrderExpirationRequest(time_in_force=TimeInForce.DAY),
-                "quantity": Decimal(str(order.quantity)),
+                "quantity": order.quantity,
             }
             if order.limit_price is not None:
                 kwargs["limit_price"] = Decimal(str(order.limit_price))
@@ -227,7 +227,7 @@ class PublicComExecAdapter(ExecAdapter):
             instrument=OrderInstrument(symbol=order.symbol, type=instrument_type),
             order_side=_SIDE_TO_SDK[order.side],
             order_type=_TYPE_TO_SDK[order.order_type],
-            quantity=Decimal(str(order.quantity)),
+            quantity=order.quantity,
             limit_price=Decimal(str(order.limit_price)) if order.limit_price else None,
         )
         return await self._client.perform_preflight(request)

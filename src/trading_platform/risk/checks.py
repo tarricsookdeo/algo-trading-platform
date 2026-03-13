@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from trading_platform.core.models import Order, Position
@@ -10,12 +11,12 @@ from trading_platform.risk.models import RiskConfig, RiskState
 
 def check_position_size(order: Order, positions: list[Position], config: RiskConfig) -> tuple[bool, str]:
     """Check that order doesn't exceed max position size."""
-    existing_qty = 0.0
+    existing_qty = Decimal("0")
     for p in positions:
         if p.symbol == order.symbol:
             existing_qty = p.quantity
             break
-    new_total = existing_qty + order.quantity
+    new_total = float(existing_qty + order.quantity)
     if new_total > config.max_position_size:
         return False, f"Position size {new_total} exceeds limit {config.max_position_size} for {order.symbol}"
     return True, ""
@@ -35,7 +36,7 @@ def check_position_concentration(
         if p.symbol == order.symbol:
             position_value = p.market_value
             break
-    order_value = order.quantity * (order.limit_price or 0.0)
+    order_value = float(order.quantity) * (order.limit_price or 0.0)
     new_value = position_value + order_value
     concentration = new_value / portfolio_value
     if concentration > config.max_position_concentration:
@@ -46,7 +47,7 @@ def check_position_concentration(
 def check_order_value(order: Order, config: RiskConfig) -> tuple[bool, str]:
     """Check that order value doesn't exceed limit."""
     price = order.limit_price or order.stop_price or 0.0
-    value = order.quantity * price
+    value = float(order.quantity) * price
     if value > config.max_order_value:
         return False, f"Order value ${value:,.2f} exceeds limit ${config.max_order_value:,.2f}"
     return True, ""

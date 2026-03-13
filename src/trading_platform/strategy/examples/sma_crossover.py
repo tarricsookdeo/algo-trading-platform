@@ -7,6 +7,7 @@ This is for documentation and testing — NOT for live trading.
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from decimal import Decimal
 from typing import Any
 
 from trading_platform.core.enums import OrderSide, OrderType
@@ -30,7 +31,7 @@ class SMACrossoverStrategy(Strategy):
         self.short_window: int = self.config.get("short_window", 10)
         self.long_window: int = self.config.get("long_window", 30)
         self.symbols: list[str] = self.config.get("symbols", [])
-        self.quantity: float = self.config.get("quantity", 100.0)
+        self.quantity: Decimal = Decimal(str(self.config.get("quantity", 100)))
         self._prices: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=self.long_window))
         self._position_side: dict[str, str] = {}  # symbol -> "long" | "short" | ""
 

@@ -7,6 +7,7 @@ never adapter-specific types.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -82,7 +83,7 @@ class Instrument(BaseModel):
     """Tradable instrument definition."""
     symbol: str
     name: str = ""
-    asset_class: AssetClass = AssetClass.STOCK
+    asset_class: AssetClass = AssetClass.EQUITY
     exchange: str = ""
     tradable: bool = True
     shortable: bool = False
@@ -101,12 +102,13 @@ class Order(BaseModel):
     symbol: str = ""
     side: OrderSide = OrderSide.BUY
     order_type: OrderType = OrderType.MARKET
-    quantity: float = 0.0
+    quantity: Decimal = Decimal("0")
     limit_price: float | None = None
     stop_price: float | None = None
     status: OrderStatus = OrderStatus.NEW
-    filled_quantity: float = 0.0
+    filled_quantity: Decimal = Decimal("0")
     filled_avg_price: float = 0.0
+    asset_class: AssetClass = AssetClass.EQUITY
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -118,14 +120,14 @@ class Fill(BaseModel):
     symbol: str = ""
     side: OrderSide = OrderSide.BUY
     price: float = 0.0
-    quantity: float = 0.0
+    quantity: Decimal = Decimal("0")
     timestamp: datetime | None = None
 
 
 class Position(BaseModel):
     """Current position (placeholder for execution layer)."""
     symbol: str = ""
-    quantity: float = 0.0
+    quantity: Decimal = Decimal("0")
     avg_entry_price: float = 0.0
     market_value: float = 0.0
     unrealized_pnl: float = 0.0

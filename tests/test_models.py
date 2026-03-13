@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from trading_platform.core.enums import AssetClass, BarType, OrderSide, OrderType
 from trading_platform.core.models import (
@@ -110,11 +111,11 @@ def test_instrument():
     i = Instrument(
         symbol="AAPL",
         name="Apple Inc.",
-        asset_class=AssetClass.STOCK,
+        asset_class=AssetClass.EQUITY,
         exchange="NASDAQ",
         tradable=True,
     )
-    assert i.asset_class == AssetClass.STOCK
+    assert i.asset_class == AssetClass.EQUITY
     assert i.tradable is True
     assert i.strike is None
 
@@ -147,7 +148,7 @@ def test_fill_defaults():
 
 def test_position_defaults():
     p = Position()
-    assert p.quantity == 0.0
+    assert p.quantity == Decimal("0")
 
 
 def test_system_event():

@@ -14,11 +14,14 @@ from pathlib import Path
 
 import uvicorn
 
+from trading_platform.adapters.crypto.adapter import CryptoExecAdapter
+from trading_platform.adapters.crypto.config import CryptoConfig
 from trading_platform.adapters.public_com.adapter import PublicComExecAdapter
 from trading_platform.adapters.public_com.config import PublicComConfig
 from trading_platform.bracket.manager import BracketOrderManager
 from trading_platform.core.config import load_settings
-from trading_platform.core.enums import Channel
+from trading_platform.core.enums import AssetClass, Channel
+from trading_platform.core.order_router import OrderRouter
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
 from trading_platform.dashboard.app import create_app
@@ -92,8 +95,11 @@ async def run(args: argparse.Namespace) -> None:
         )
         data_manager.register_provider(csv_provider)
 
-    # ── Public.com Exec Adapter ────────────────────────────────────────
-    exec_adapter: PublicComExecAdapter | None = None
+    # ── Order Router & Exec Adapters ──────────────────────────────────
+    order_router = OrderRouter()
+    equity_adapter: PublicComExecAdapter | None = None
+    crypto_adapter: CryptoExecAdapter | None = None
+
     if settings.public_com.api_secret and settings.public_com.account_id:
         public_config = PublicComConfig(
             api_secret=settings.public_com.api_secret,
@@ -101,10 +107,29 @@ async def run(args: argparse.Namespace) -> None:
             poll_interval=settings.public_com.poll_interval,
             portfolio_refresh=settings.public_com.portfolio_refresh,
         )
-        exec_adapter = PublicComExecAdapter(public_config, event_bus)
-        log.info("public.com exec adapter configured")
+        equity_adapter = PublicComExecAdapter(public_config, event_bus)
+        order_router.register(AssetClass.EQUITY, equity_adapter)
+        order_router.register(AssetClass.OPTION, equity_adapter)
+        log.info("public.com equity adapter configured")
     else:
-        log.info("public.com exec adapter skipped (no credentials)")
+        log.info("public.com equity adapter skipped (no credentials)")
+
+    if settings.crypto.api_secret:
+        crypto_config = CryptoConfig(
+            api_secret=settings.crypto.api_secret,
+            account_id=settings.crypto.account_id,
+            trading_pairs=settings.crypto.trading_pairs,
+            poll_interval=settings.crypto.poll_interval,
+            portfolio_refresh=settings.crypto.portfolio_refresh,
+        )
+        crypto_adapter = CryptoExecAdapter(crypto_config, event_bus)
+        order_router.register(AssetClass.CRYPTO, crypto_adapter)
+        log.info("crypto adapter configured")
+    else:
+        log.info("crypto adapter skipped (no credentials)")
+
+    # Use order_router as the unified exec adapter
+    exec_adapter = order_router if order_router._adapters else None
 
     # ── Risk Manager ───────────────────────────────────────────────────
     risk_config = RiskConfig(
@@ -159,10 +184,10 @@ async def run(args: argparse.Namespace) -> None:
         await data_manager.start()
         log.info("data manager started")
 
-        # Connect exec adapter if configured
+        # Connect exec adapters if configured
         if exec_adapter:
             await exec_adapter.connect()
-            log.info("public.com exec adapter connected")
+            log.info("exec adapters connected")
 
         # Wire bracket and strategy manager events
         await bracket_manager.wire_events()

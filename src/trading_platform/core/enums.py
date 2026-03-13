@@ -27,9 +27,14 @@ class OrderStatus(StrEnum):
 
 
 class AssetClass(StrEnum):
-    STOCK = "stock"
+    EQUITY = "equity"
     OPTION = "option"
     CRYPTO = "crypto"
+
+
+class ContractType(StrEnum):
+    CALL = "call"
+    PUT = "put"
 
 
 class BarType(StrEnum):

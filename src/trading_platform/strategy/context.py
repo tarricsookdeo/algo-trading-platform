@@ -88,7 +88,7 @@ class StrategyContext:
     async def submit_bracket_order(
         self,
         symbol: str,
-        quantity: int,
+        quantity: Decimal,
         entry_type: OrderType,
         stop_loss_price: Decimal,
         take_profit_price: Decimal,

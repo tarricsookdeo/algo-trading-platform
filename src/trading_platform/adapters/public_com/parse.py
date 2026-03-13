@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from trading_platform.core.enums import AssetClass, OrderSide, OrderStatus, OrderType
@@ -61,10 +62,10 @@ def sdk_order_to_platform(sdk_order: Any) -> Order:
     if hasattr(sdk_order, "instrument") and sdk_order.instrument:
         symbol = getattr(sdk_order.instrument, "symbol", "")
 
-    quantity = float(getattr(sdk_order, "quantity", 0) or 0)
+    quantity = Decimal(str(getattr(sdk_order, "quantity", 0) or 0))
     limit_price = float(getattr(sdk_order, "limit_price", 0) or 0) or None
     stop_price = float(getattr(sdk_order, "stop_price", 0) or 0) or None
-    filled_qty = float(getattr(sdk_order, "filled_quantity", 0) or 0)
+    filled_qty = Decimal(str(getattr(sdk_order, "filled_quantity", 0) or 0))
     filled_avg = float(getattr(sdk_order, "average_fill_price", 0) or 0)
 
     return Order(
@@ -86,7 +87,7 @@ def sdk_order_to_platform(sdk_order: Any) -> Order:
 def sdk_position_to_platform(sdk_pos: Any) -> Position:
     """Convert an SDK PortfolioPosition to a platform Position."""
     symbol = getattr(sdk_pos, "symbol", "")
-    quantity = float(getattr(sdk_pos, "quantity", 0) or 0)
+    quantity = Decimal(str(getattr(sdk_pos, "quantity", 0) or 0))
     avg_entry = float(getattr(sdk_pos, "average_price", 0) or 0)
     market_value = float(getattr(sdk_pos, "market_value", 0) or 0)
     unrealized = float(getattr(sdk_pos, "unrealized_pnl", 0) or 0)

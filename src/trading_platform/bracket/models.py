@@ -16,7 +16,7 @@ class BracketOrder(BaseModel):
 
     bracket_id: str
     symbol: str
-    quantity: int
+    quantity: Decimal
     entry_type: OrderType  # MARKET or LIMIT
     entry_limit_price: Decimal | None = None
     stop_loss_price: Decimal

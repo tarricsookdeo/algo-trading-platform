@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -323,7 +324,7 @@ class TestSMACrossover:
     def test_init(self, sma_strategy):
         assert sma_strategy.short_window == 3
         assert sma_strategy.long_window == 5
-        assert sma_strategy.quantity == 10
+        assert sma_strategy.quantity == Decimal("10")
 
     @pytest.mark.asyncio
     async def test_on_start_clears_state(self, sma_strategy):

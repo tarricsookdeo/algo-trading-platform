@@ -45,6 +45,14 @@ class RiskSettings(BaseSettings):
     blocked_symbols: list[str] = Field(default_factory=list)
 
 
+class CryptoSettings(BaseSettings):
+    api_secret: str = Field(default="", alias="PUBLIC_API_SECRET")
+    account_id: str = Field(default="", alias="PUBLIC_ACCOUNT_ID")
+    trading_pairs: list[str] = Field(default_factory=lambda: ["BTC-USD", "ETH-USD"])
+    poll_interval: float = 2.0
+    portfolio_refresh: float = 30.0
+
+
 class PlatformSettings(BaseSettings):
     log_level: str = "INFO"
     symbols: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"])
@@ -53,6 +61,7 @@ class PlatformSettings(BaseSettings):
 class Settings(BaseSettings):
     data: DataSettings = Field(default_factory=DataSettings)
     public_com: PublicComSettings = Field(default_factory=PublicComSettings)
+    crypto: CryptoSettings = Field(default_factory=CryptoSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     platform: PlatformSettings = Field(default_factory=PlatformSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
@@ -84,11 +93,13 @@ def load_settings(config_path: Path | None = None) -> Settings:
 
     data_cfg = DataSettings(**toml_data.get("data", {}))
     public_com_data = toml_data.get("public_com", {})
+    crypto_data = toml_data.get("crypto", {})
     dashboard_data = toml_data.get("dashboard", {})
     platform_data = toml_data.get("platform", {})
     risk_data = toml_data.get("risk", {})
 
     public_com = PublicComSettings(**public_com_data)
+    crypto = CryptoSettings(**crypto_data)
     dashboard = DashboardSettings(**dashboard_data)
     platform_cfg = PlatformSettings(**platform_data)
     risk = RiskSettings(**risk_data)
@@ -96,6 +107,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     return Settings(
         data=data_cfg,
         public_com=public_com,
+        crypto=crypto,
         dashboard=dashboard,
         platform=platform_cfg,
         risk=risk,

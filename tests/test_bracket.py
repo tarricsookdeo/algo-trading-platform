@@ -231,7 +231,7 @@ class TestStopLossLifecycle:
         entry_order = mock_exec.submit_order.call_args[0][0]
         assert entry_order.side == OrderSide.BUY
         assert entry_order.order_type == OrderType.MARKET
-        assert entry_order.quantity == 10.0
+        assert entry_order.quantity == Decimal("10")
 
         # Simulate entry fill
         await fill_entry(bus, bracket)
@@ -306,7 +306,7 @@ class TestTakeProfitLifecycle:
         tp_order = mock_exec.submit_order.call_args[0][0]
         assert tp_order.side == OrderSide.SELL
         assert tp_order.order_type == OrderType.MARKET
-        assert tp_order.quantity == 10.0
+        assert tp_order.quantity == Decimal("10")
 
         # Fill take-profit
         await fill_take_profit(bus, bracket)

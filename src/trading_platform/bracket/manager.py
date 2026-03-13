@@ -45,7 +45,7 @@ class BracketOrderManager:
     async def submit_bracket_order(
         self,
         symbol: str,
-        quantity: int,
+        quantity: Decimal,
         entry_type: OrderType,
         stop_loss_price: Decimal,
         take_profit_price: Decimal,
@@ -304,7 +304,7 @@ class BracketOrderManager:
             symbol=bracket.symbol,
             side=OrderSide.BUY,
             order_type=bracket.entry_type,
-            quantity=float(bracket.quantity),
+            quantity=bracket.quantity,
             limit_price=float(bracket.entry_limit_price) if bracket.entry_limit_price else None,
         )
         bracket.entry_order_id = entry_order.order_id
@@ -328,7 +328,7 @@ class BracketOrderManager:
             symbol=bracket.symbol,
             side=OrderSide.SELL,
             order_type=OrderType.STOP,
-            quantity=float(bracket.quantity),
+            quantity=bracket.quantity,
             stop_price=float(bracket.stop_loss_price),
         )
         bracket.stop_loss_order_id = stop_order.order_id
@@ -391,7 +391,7 @@ class BracketOrderManager:
             symbol=bracket.symbol,
             side=OrderSide.SELL,
             order_type=OrderType.MARKET,
-            quantity=float(bracket.quantity),
+            quantity=bracket.quantity,
         )
         bracket.take_profit_order_id = sell_order.order_id
         self._tp_to_bracket[sell_order.order_id] = bracket.bracket_id

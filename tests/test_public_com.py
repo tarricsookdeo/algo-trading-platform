@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -96,8 +97,8 @@ class TestSdkOrderToPlatform:
         assert order.side == OrderSide.BUY
         assert order.order_type == OrderType.LIMIT
         assert order.symbol == "AAPL"
-        assert order.quantity == 100
-        assert order.filled_quantity == 100
+        assert order.quantity == Decimal("100")
+        assert order.filled_quantity == Decimal("100")
 
     def test_minimal_order(self):
         sdk_order = SimpleNamespace(
@@ -150,7 +151,7 @@ class TestSdkPositionToPlatform:
         )
         pos = sdk_position_to_platform(sdk_pos)
         assert pos.symbol == "AAPL"
-        assert pos.quantity == 100
+        assert pos.quantity == Decimal("100")
         assert pos.avg_entry_price == 150.0
         assert pos.market_value == 15500.0
         assert pos.unrealized_pnl == 500.0
@@ -165,14 +166,14 @@ class TestSdkPositionToPlatform:
             unrealized_pnl=500.0,
         )
         pos = sdk_position_to_platform(sdk_pos)
-        assert pos.quantity == 50  # absolute value
+        assert pos.quantity == Decimal("50")  # absolute value
         assert pos.side == "short"
 
     def test_missing_fields(self):
         sdk_pos = SimpleNamespace(symbol="X")
         pos = sdk_position_to_platform(sdk_pos)
         assert pos.symbol == "X"
-        assert pos.quantity == 0.0
+        assert pos.quantity == Decimal("0")
 
 
 # ── Adapter tests (with mocked client) ───────────────────────────────

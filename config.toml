@@ -19,6 +19,11 @@ max_portfolio_drawdown = 0.15
 allowed_symbols = []
 blocked_symbols = []
 
+[crypto]
+trading_pairs = ["BTC-USD", "ETH-USD"]
+poll_interval = 2.0
+portfolio_refresh = 30.0
+
 [dashboard]
 host = "0.0.0.0"
 port = 8080
