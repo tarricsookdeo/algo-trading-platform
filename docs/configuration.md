@@ -102,6 +102,7 @@ The platform starts in **data-only mode** if no execution credentials are set. D
 | `dedup_quotes_in_batch` | bool | `true` | Deduplicate quotes per symbol within each batch (keeps latest) |
 | `default_serialization` | string | `"json"` | Default serialization format: `"json"` or `"msgpack"` |
 | `lazy_deserialize` | bool | `false` | Defer deserialization to consumer (stores raw bytes in queue) |
+| `use_uvloop` | bool | `true` | Use uvloop as the event loop (faster I/O; falls back to default on Windows or if not installed) |
 
 ### `[dashboard]` — Dashboard Settings
 

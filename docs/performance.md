@@ -215,6 +215,103 @@ class MyStrategy(Strategy):
 - `evaluations_skipped` / `evaluations_run` per strategy
 - `skip_rate_percent` property on each strategy
 
+## uvloop (High-Performance Event Loop)
+
+[uvloop](https://github.com/MagicStack/uvloop) is a drop-in replacement for the default `asyncio` event loop, built on top of libuv. It provides **2–4x faster** I/O operations and task scheduling compared to the default loop.
+
+### How It Works
+
+When installed and enabled, uvloop replaces the default asyncio event loop policy at startup — before any event loop is created. All existing async code runs unchanged on the faster loop.
+
+### Installation
+
+uvloop is an optional dependency (it doesn't work on Windows):
+
+```bash
+pip install algo-trading-platform[fast]
+```
+
+### Configuration
+
+```toml
+[performance]
+use_uvloop = true   # default: true — set to false to use the default asyncio loop
+```
+
+### Startup Behavior
+
+On startup the platform:
+
+1. Reads `use_uvloop` from `config.toml` (defaults to `true`)
+2. Attempts `import uvloop; uvloop.install()`
+3. Logs which event loop is active:
+   - `event loop: uvloop (high-performance)` — uvloop installed successfully
+   - `event loop: default asyncio` — uvloop not available or disabled
+
+### When to Disable
+
+- **Windows** — uvloop doesn't support Windows; the fallback is automatic
+- **Debugging** — Some debuggers work better with the default event loop
+- **Compatibility** — If you encounter rare edge cases with third-party libraries
+
+## Python 3.13 Free-Threaded Mode (Experimental)
+
+Python 3.13 introduces experimental **free-threaded mode** (also known as "no-GIL" mode), which disables the Global Interpreter Lock. This allows true parallel execution of Python threads, which can benefit CPU-bound workloads like strategy evaluation, risk calculations, and greeks computation.
+
+### How to Enable
+
+Set the `PYTHON_GIL` environment variable before starting the platform:
+
+```bash
+PYTHON_GIL=0 trading-platform
+```
+
+Or in your shell profile:
+
+```bash
+export PYTHON_GIL=0
+```
+
+You can verify free-threaded mode is active:
+
+```python
+import sys
+print(sys._is_gil_enabled())  # False when free-threaded mode is active
+```
+
+### Requirements
+
+- **Python 3.13+** compiled with `--disable-gil` (the `python3.13t` free-threaded build)
+- Standard CPython 3.13 builds include this as an experimental runtime flag
+
+### Use Cases for Trading
+
+| Workload | Benefit |
+|----------|---------|
+| Strategy evaluation across multiple symbols | Parallel `on_quote` / `on_bar` callbacks without GIL contention |
+| Greeks computation | CPU-intensive Black-Scholes calculations can run on multiple threads |
+| Risk checks | Portfolio-wide checks can run concurrently |
+| Data deserialization | MessagePack / JSON parsing across threads |
+
+### Important Caveats
+
+- **Experimental** — This feature is not yet production-stable in Python 3.13. Test thoroughly before using in live trading.
+- **C extension compatibility** — Some C extensions may not be thread-safe without the GIL. Verify that all dependencies work correctly.
+- **Thread safety** — Code that relied on the GIL for implicit thread safety may need explicit locks.
+- **Performance testing** — Free-threaded mode adds per-object locking overhead. Benchmark your specific workload to confirm it's faster than the default GIL-enabled mode.
+- **Alternative to multiprocessing** — Free-threaded mode can replace multi-process worker architectures for CPU-bound parallelism, avoiding the overhead of IPC and memory duplication.
+
+### Comparison with Other Parallelism Approaches
+
+| Approach | CPU Parallelism | Memory Sharing | Complexity |
+|----------|----------------|----------------|------------|
+| asyncio (default) | No (cooperative) | Yes | Low |
+| asyncio + uvloop | No (cooperative, faster I/O) | Yes | Low |
+| multiprocessing | Yes | No (IPC needed) | High |
+| Free-threaded (no-GIL) | Yes | Yes | Medium |
+
+For I/O-bound workloads (API calls, WebSocket streaming, data ingestion), **uvloop** is the best choice. For CPU-bound workloads (strategy computation, risk calculations), **free-threaded mode** offers parallelism without the complexity of multiprocessing.
+
 ## Monitoring and Troubleshooting
 
 ### High Queue Depth

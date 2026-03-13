@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def run(args: argparse.Namespace) -> None:
+async def run(args: argparse.Namespace, *, uvloop_active: bool = False) -> None:
     """Async main loop."""
     # ── Configuration ──────────────────────────────────────────────────
     settings = load_settings(args.config)
@@ -79,6 +79,12 @@ async def run(args: argparse.Namespace) -> None:
     log = get_logger("platform.main")
 
     print(BANNER)
+
+    if uvloop_active:
+        log.info("event loop: uvloop (high-performance)")
+    else:
+        log.info("event loop: default asyncio")
+
     log.info(
         "starting platform",
         symbols=settings.platform.symbols,
@@ -350,11 +356,43 @@ async def run(args: argparse.Namespace) -> None:
         log.info("platform stopped")
 
 
+def _install_uvloop(config_path: Path) -> bool:
+    """Install uvloop as the default event loop policy if available and enabled.
+
+    Must be called BEFORE any asyncio event loop is created.
+    Returns True if uvloop was installed, False otherwise.
+    """
+    # Check config to see if uvloop is enabled (default: True)
+    use_uvloop = True
+    try:
+        if config_path.exists():
+            with open(config_path, "rb") as f:
+                import tomllib
+                toml_data = tomllib.load(f)
+                use_uvloop = toml_data.get("performance", {}).get("use_uvloop", True)
+    except Exception:
+        pass  # If config can't be read, default to trying uvloop
+
+    if not use_uvloop:
+        return False
+
+    try:
+        import uvloop
+        uvloop.install()
+        return True
+    except ImportError:
+        return False
+
+
 def main() -> None:
     """CLI entry point."""
     args = parse_args()
+
+    # Install uvloop BEFORE asyncio.run() creates the event loop
+    uvloop_active = _install_uvloop(args.config)
+
     try:
-        asyncio.run(run(args))
+        asyncio.run(run(args, uvloop_active=uvloop_active))
     except KeyboardInterrupt:
         pass
 

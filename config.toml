@@ -50,6 +50,7 @@ consumer_flush_interval_ms = 10
 dedup_quotes_in_batch = true
 default_serialization = "json"
 lazy_deserialize = true
+use_uvloop = true
 
 [dashboard]
 host = "0.0.0.0"

@@ -14,7 +14,7 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 - **Strategy framework** — Abstract base class with lifecycle management, event-driven signal generation, and order submission
 - **Risk management** — 6 pre-trade checks, 2 post-trade checks, greeks-aware risk checks (delta, gamma, theta, vega limits), automatic trading halts, and configurable limits
 - **Monitoring dashboard** — FastAPI-powered UI with real-time WebSocket updates, REST API, and system metrics for all order types including trailing stops, scaled orders, brackets, and options greeks
-- **Performance pipeline** — Internal message queue with batch processing, quote deduplication, lossy/lossless modes, dashboard throttling, and real-time performance metrics (throughput, latency, queue depth)
+- **Performance pipeline** — Internal message queue with batch processing, quote deduplication, lossy/lossless modes, dashboard throttling, real-time performance metrics, and optional uvloop for 2–4x faster async I/O
 - **Event-driven architecture** — Async pub/sub event bus connecting all components with wildcard subscriptions
 
 ## Architecture

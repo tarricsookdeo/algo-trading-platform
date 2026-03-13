@@ -29,6 +29,7 @@ class PerformanceSettings(BaseSettings):
     dedup_quotes_in_batch: bool = True
     default_serialization: str = "json"
     lazy_deserialize: bool = False
+    use_uvloop: bool = True
 
 
 class DashboardSettings(BaseSettings):
