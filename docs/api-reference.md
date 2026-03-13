@@ -264,7 +264,6 @@ class DataManager:
 class DataConfig(BaseModel):
     ingestion_enabled: bool = True
     csv_directory: str = ""
-    parquet_directory: str = ""
     replay_speed: float = 0.0
     max_bars_per_request: int = 10000
 ```
@@ -280,15 +279,11 @@ class CsvBarProvider(DataProvider):
     # Loads CSV on connect(), supports directory globbing
 ```
 
-### ParquetBarProvider
 
-`trading_platform.data.file_provider.ParquetBarProvider`
 
 ```python
-class ParquetBarProvider(DataProvider):
     def __init__(self, file_path: str, replay_speed: float = 0.0)
     # Implements all DataProvider methods
-    # Requires pyarrow: pip install algo-trading-platform[parquet]
 ```
 
 ---

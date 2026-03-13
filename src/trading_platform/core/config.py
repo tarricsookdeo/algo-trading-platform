@@ -17,7 +17,6 @@ from pydantic_settings import BaseSettings
 class DataSettings(BaseSettings):
     ingestion_enabled: bool = True
     csv_directory: str = ""
-    parquet_directory: str = ""
     replay_speed: float = 0.0
     max_bars_per_request: int = 10000
 

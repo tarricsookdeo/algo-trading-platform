@@ -20,7 +20,7 @@ Comprehensive documentation for the algo trading platform — a production-orien
 
 The platform implements:
 
-- **Bring-your-own-data ingestion** — CSV/Parquet file loading, REST POST, WebSocket streaming, and custom Python providers via DataProvider ABC
+- **Bring-your-own-data ingestion** — CSV file loading, REST POST, WebSocket streaming, and custom Python providers via DataProvider ABC
 - **Live order execution** — Equities, options, and multi-leg spreads via Public.com
 - **Strategy framework** — Abstract base class with lifecycle management and event wiring
 - **Risk management** — 6 pre-trade checks, 2 post-trade checks, automatic trading halts

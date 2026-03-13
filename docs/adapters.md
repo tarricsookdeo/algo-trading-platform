@@ -8,7 +8,7 @@ Data enters the platform through three paths:
 
 | Path | Use Case |
 |------|----------|
-| **File providers** (CSV, Parquet) | Historical data replay and backtesting |
+| **File providers** (CSV) | Historical data replay and warm-starting strategies |
 | **REST/WebSocket ingestion** | External systems pushing data in real time |
 | **Custom DataProvider** | Any data source via Python |
 
@@ -138,20 +138,14 @@ bars = await provider.get_historical_bars("AAPL", start, end)
 
 ---
 
-## ParquetBarProvider
 
-`trading_platform.data.file_provider.ParquetBarProvider`
 
-Same interface as CsvBarProvider but reads Parquet files. Requires the `pyarrow` optional dependency.
 
 ```bash
-pip install algo-trading-platform[parquet]
 ```
 
 ```python
-from trading_platform.data.file_provider import ParquetBarProvider
 
-provider = ParquetBarProvider("/data/bars.parquet")
 await provider.connect()
 ```
 

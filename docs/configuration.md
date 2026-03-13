@@ -19,7 +19,6 @@ The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCO
 |-------|------|---------|-------------|
 | `ingestion_enabled` | bool | `true` | Enable REST and WebSocket data ingestion endpoints |
 | `csv_directory` | string | `""` | Path to CSV file or directory (loads all `*.csv` files if directory) |
-| `parquet_directory` | string | `""` | Path to Parquet file or directory (requires `[parquet]` extra) |
 | `replay_speed` | float | `0.0` | Replay speed multiplier for file providers (`0` = instant, `1.0` = real-time, `2.0` = 2x) |
 | `max_bars_per_request` | int | `10000` | Maximum bars per REST ingestion request |
 

@@ -35,10 +35,8 @@ This installs the platform package (`trading_platform`) along with all dependenc
 
 Dev dependencies: `pytest`, `pytest-asyncio`.
 
-For Parquet file support:
 
 ```bash
-pip install -e ".[parquet]"
 ```
 
 ## Configuration

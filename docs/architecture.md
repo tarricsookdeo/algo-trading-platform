@@ -101,7 +101,7 @@ _track_order() (async polling)
 2. Initialize structured logging (structlog)
 3. Create EventBus
 4. Create DataManager with DataConfig
-5. Register file providers (CsvBarProvider / ParquetBarProvider) if configured
+5. Register file providers (CsvBarProvider) if configured
 6. Start DataManager → connect and stream all registered providers
 7. Create PublicComExecAdapter → connect() → authenticate API
 8. Start portfolio refresh loop
@@ -146,7 +146,7 @@ trading_platform.main
     │
     ├── data.manager (DataManager)
     │   ├── data.provider (DataProvider ABC)
-    │   ├── data.file_provider (CsvBarProvider, ParquetBarProvider)
+    │   ├── data.file_provider (CsvBarProvider)
     │   ├── data.config (DataConfig)
     │   └── data.ingestion_server (mount_ingestion_routes)
     │
@@ -172,7 +172,7 @@ trading_platform.main
 
 Data enters the platform through three paths, all converging on the EventBus:
 
-1. **File providers** — `CsvBarProvider` / `ParquetBarProvider` load historical data and yield `Bar` objects via async iterators
+1. **File providers** — `CsvBarProvider` loads historical data and yields `Bar` objects via async iterators
 2. **REST ingestion** — External systems POST to `/api/data/bars`, `/api/data/quotes`, `/api/data/trades`
 3. **WebSocket ingestion** — External systems stream data via `ws://host:port/ws/data`
 

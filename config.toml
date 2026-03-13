@@ -1,7 +1,6 @@
 [data]
 ingestion_enabled = true
 csv_directory = ""
-parquet_directory = ""
 replay_speed = 0.0
 max_bars_per_request = 10000
 

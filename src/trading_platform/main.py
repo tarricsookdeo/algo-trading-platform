@@ -79,7 +79,6 @@ async def run(args: argparse.Namespace) -> None:
     data_config = DataConfig(
         ingestion_enabled=settings.data.ingestion_enabled,
         csv_directory=settings.data.csv_directory,
-        parquet_directory=settings.data.parquet_directory,
         replay_speed=settings.data.replay_speed,
         max_bars_per_request=settings.data.max_bars_per_request,
     )

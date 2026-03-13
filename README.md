@@ -4,7 +4,7 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 
 ## Features
 
-- **Bring-your-own-data** — Ingest market data from any source via file loading (CSV/Parquet), REST POST, WebSocket streaming, or custom Python providers
+- **Bring-your-own-data** — Ingest market data from any source via file loading (CSV), REST POST, WebSocket streaming, or custom Python providers
 - **Live order execution** — Equity orders, single-leg options, and multi-leg spreads via Public.com
 - **Strategy framework** — Abstract base class with lifecycle management, event-driven signal generation, and order submission
 - **Risk management** — 6 pre-trade checks, 2 post-trade checks, automatic trading halts, and configurable limits
@@ -41,7 +41,6 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 │  │  ┌───────────────────┐  │   │  ┌───────────────────┐  │     │
 │  │  │ DataProvider ABC  │  │   │  │ Equity Orders     │  │     │
 │  │  │ CsvBarProvider    │  │   │  │ Option Orders     │  │     │
-│  │  │ ParquetBarProvider│  │   │  │ Multi-leg Spreads │  │     │
 │  │  │ Custom Providers  │  │   │  │ Portfolio Sync    │  │     │
 │  │  ├───────────────────┤  │   │  │ Preflight Checks  │  │     │
 │  │  │ REST Ingestion    │  │   │  └───────────────────┘  │     │
@@ -63,10 +62,8 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 pip install -e ".[dev]"
 ```
 
-For Parquet file support:
 
 ```bash
-pip install -e ".[parquet]"
 ```
 
 ### 2. Configure
@@ -172,8 +169,8 @@ src/trading_platform/
 ├── data/
 │   ├── provider.py          # DataProvider abstract base class
 │   ├── manager.py           # DataManager (provider orchestration)
+│   ├── file_provider.py     # CsvBarProvider for historical CSV data
 │   ├── config.py            # DataConfig settings
-│   ├── file_provider.py     # CsvBarProvider, ParquetBarProvider
 │   └── ingestion_server.py  # REST + WebSocket ingestion endpoints
 ├── adapters/
 │   ├── base.py              # ExecAdapter ABC
@@ -224,7 +221,6 @@ docs/
 [data]
 ingestion_enabled = true           # Enable data ingestion endpoints
 csv_directory = ""                 # Path to CSV files/directory (optional)
-parquet_directory = ""             # Path to Parquet files/directory (optional)
 replay_speed = 0.0                 # Replay speed multiplier (0 = instant)
 max_bars_per_request = 10000       # Max bars per REST ingestion request
 
