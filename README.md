@@ -6,6 +6,7 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 
 - **Bring-your-own-data** — Ingest market data from any source via file loading (CSV), REST POST, WebSocket streaming, or custom Python providers
 - **Live order execution** — Equity orders, single-leg options, and multi-leg spreads via Public.com
+- **Synthetic bracket orders** — Framework-managed entry + stop-loss + take-profit lifecycle with bid-price monitoring
 - **Strategy framework** — Abstract base class with lifecycle management, event-driven signal generation, and order submission
 - **Risk management** — 6 pre-trade checks, 2 post-trade checks, automatic trading halts, and configurable limits
 - **Monitoring dashboard** — FastAPI-powered UI with real-time WebSocket updates, REST API, and system metrics

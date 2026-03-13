@@ -43,10 +43,12 @@ class StrategyManager:
         event_bus: EventBus,
         exec_adapter: Any = None,
         risk_manager: Any = None,
+        bracket_manager: Any = None,
     ) -> None:
         self._bus = event_bus
         self._exec = exec_adapter
         self._risk = risk_manager
+        self._bracket = bracket_manager
         self._log = get_logger("strategy.manager")
         self._strategies: dict[str, StrategyEntry] = {}
 
@@ -61,6 +63,7 @@ class StrategyManager:
             event_bus=self._bus,
             exec_adapter=self._exec,
             risk_manager=self._risk,
+            bracket_manager=self._bracket,
         )
         strategy.context = context
         strategy.event_bus = self._bus

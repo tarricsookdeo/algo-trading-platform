@@ -14,25 +14,26 @@ The algo trading platform is a production-oriented, event-driven system built in
 │                              Event Bus                                   │
 │  Market: quote │ trade │ bar │ status     Strategy: signal │ lifecycle   │
 │  Exec: order.submitted │ .filled │ ...   Risk: check.* │ alert │ halt  │
+│  Bracket: bracket.entry.filled │ .stopped_out │ .take_profit.* │ ...   │
 │  System: system │ error                  Portfolio: portfolio │ account  │
 ├───────────────┬──────────────────┬───────────────────┬──────────────────┤
-│  DataManager  │   Public.com     │  Strategy Manager  │  Risk Manager   │
-│  (BYOD)       │   Exec Adapter   │                    │                 │
-│               │                  │  ┌──────────────┐  │  Pre-trade:     │
-│ ┌───────────┐ │  Order placement │  │  Strategy     │  │  6 checks      │
-│ │ CSV/Parq  │ │  Cancel/replace  │  │  ┌──────────┐│  │                 │
-│ │ Providers │ │  Portfolio sync  │  │  │ Context  ││  │  Post-trade:    │
-│ ├───────────┤ │  Account info   │  │  └──────────┘│  │  2 checks       │
-│ │ REST      │ │                  │  │  on_quote()  │  │                 │
-│ │ Ingestion │ │  Auth:           │  │  on_trade()  │  │  Halt/resume    │
-│ ├───────────┤ │  ApiKeyAuthConfig│  │  on_bar()    │  │                 │
-│ │ WebSocket │ │  Auto-refresh   │  │  on_signal() │  │                 │
-│ │ Ingestion │ │                  │  └──────────────┘  │                 │
-│ ├───────────┤ │                  │                    │                 │
-│ │ Custom    │ │                  │                    │                 │
-│ │ Providers │ │                  │                    │                 │
-│ └───────────┘ │                  │                    │                 │
-├───────────────┴──────────────────┴───────────────────┴──────────────────┤
+│  DataManager  │   Public.com     │  Bracket Manager   │  Strategy Mgr   │  Risk Manager   │
+│  (BYOD)       │   Exec Adapter   │                    │                 │                 │
+│               │                  │  Entry → SL → TP   │  ┌───────────┐ │  Pre-trade:     │
+│ ┌───────────┐ │  Order placement │  SL rests live     │  │ Strategy  │ │  6 checks       │
+│ │ CSV/Parq  │ │  Cancel/replace  │  TP via bid watch  │  │ ┌───────┐│ │                 │
+│ │ Providers │ │  Portfolio sync  │                    │  │ │Context││ │  Post-trade:    │
+│ ├───────────┤ │  Account info   │  State machine:    │  │ └───────┘│ │  2 checks       │
+│ │ REST      │ │                  │  PENDING_ENTRY →   │  │ on_bar() │ │                 │
+│ │ Ingestion │ │  Auth:           │  ENTRY_PLACED →    │  │ on_quote│ │  Halt/resume    │
+│ ├───────────┤ │  ApiKeyAuthConfig│  MONITORING →      │  └───────────┘ │                 │
+│ │ WebSocket │ │  Auto-refresh   │  STOPPED_OUT or    │                 │                 │
+│ │ Ingestion │ │                  │  TP_FILLED         │                 │                 │
+│ ├───────────┤ │                  │                    │                 │                 │
+│ │ Custom    │ │                  │                    │                 │                 │
+│ │ Providers │ │                  │                    │                 │                 │
+│ └───────────┘ │                  │                    │                 │                 │
+├───────────────┴──────────────────┴───────────────────┴─────────────────┴─────────────────┤
 │                           Core Domain                                    │
 │  Models: QuoteTick, TradeTick, Bar, Order, Position, Fill, Instrument   │
 │  Config (Pydantic Settings) │ Logging (structlog) │ Clock │ Enums       │
@@ -92,6 +93,43 @@ _track_order() (async polling)
     └── publish("execution.order.rejected")
 ```
 
+### Event Flow: Bracket Order Lifecycle
+
+```
+StrategyContext.submit_bracket_order(symbol, qty, ...)
+    │
+    ▼
+BracketOrderManager.submit_bracket_order()
+    │
+    ├── Validate params → create BracketOrder
+    ├── Place entry order via ExecAdapter
+    │       │
+    │       ▼
+    │   "execution.order.filled" (entry)
+    │       │
+    │       ├── Record entry fill price
+    │       ├── publish("bracket.entry.filled")
+    │       ├── Place stop-loss order (resting)
+    │       ├── publish("bracket.stop.placed")
+    │       └── Enter MONITORING state
+    │
+    │   ┌── "quote" events (bid price monitoring) ──┐
+    │   │                                            │
+    │   │  bid >= take_profit_price?                 │
+    │   │      │ YES                                 │
+    │   │      ├── publish("bracket.take_profit.triggered")
+    │   │      ├── Cancel stop-loss order            │
+    │   │      ├── Wait for "execution.order.cancelled" (stop)
+    │   │      ├── Place market sell                 │
+    │   │      └── "execution.order.filled" (sell)   │
+    │   │          └── publish("bracket.take_profit.filled")
+    │   │                                            │
+    │   └── "execution.order.filled" (stop-loss) ───┘
+    │       └── publish("bracket.stopped_out")
+    │
+    └── All state changes → publish("bracket.state_change")
+```
+
 ## Component Lifecycle
 
 ### Startup Sequence
@@ -106,10 +144,11 @@ _track_order() (async polling)
 7. Create PublicComExecAdapter → connect() → authenticate API
 8. Start portfolio refresh loop
 9. Create RiskManager with RiskConfig
-10. Create StrategyManager → wire_events() → subscribe to market data channels
-11. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
-12. Start uvicorn server
-13. Publish system ready event
+10. Create BracketOrderManager → wire_events() → subscribe to execution + quote channels
+11. Create StrategyManager (with bracket_manager) → wire_events() → subscribe to market data channels
+12. Create Dashboard (FastAPI + DashboardWSManager) → mount ingestion routes → start()
+13. Start uvicorn server
+14. Publish system ready event
 ```
 
 ### Shutdown Sequence
@@ -118,10 +157,11 @@ _track_order() (async polling)
 1. Receive SIGINT or SIGTERM
 2. StrategyManager.stop_all() → stop all active strategies
 3. StrategyManager.unwire_events() → unsubscribe from channels
-4. DashboardWSManager.stop() → close WebSocket connections
-5. PublicComExecAdapter.disconnect() → cancel portfolio refresh, close client
-6. DataManager.stop() → disconnect all providers, cancel streaming tasks
-7. Uvicorn server shutdown
+4. BracketOrderManager.unwire_events() → unsubscribe from execution + quote channels
+5. DashboardWSManager.stop() → close WebSocket connections
+6. PublicComExecAdapter.disconnect() → cancel portfolio refresh, close client
+7. DataManager.stop() → disconnect all providers, cancel streaming tasks
+8. Uvicorn server shutdown
 ```
 
 ## Async Patterns
@@ -154,9 +194,13 @@ trading_platform.main
     │   ├── adapters.public_com.client (PublicComClient)
     │   └── adapters.public_com.parse (sdk_*_to_platform)
     │
+    ├── bracket.manager (BracketOrderManager)
+    │   ├── bracket.models (BracketOrder)
+    │   └── bracket.enums (BracketState, BracketChannel)
+    │
     ├── strategy.manager (StrategyManager)
     │   ├── strategy.base (Strategy ABC)
-    │   └── strategy.context (StrategyContext)
+    │   └── strategy.context (StrategyContext → BracketOrderManager)
     │
     ├── risk.manager (RiskManager)
     │   ├── risk.checks (check_*)

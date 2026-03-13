@@ -332,6 +332,103 @@ class PublicComClient:
 
 ---
 
+## Bracket Orders
+
+### BracketOrderManager
+
+`trading_platform.bracket.manager.BracketOrderManager`
+
+```python
+class BracketOrderManager:
+    def __init__(self, event_bus: EventBus, exec_adapter: ExecAdapter | None = None)
+
+    async def submit_bracket_order(
+        self,
+        symbol: str,
+        quantity: int,
+        entry_type: OrderType,
+        stop_loss_price: Decimal,
+        take_profit_price: Decimal,
+        entry_limit_price: Decimal | None = None,
+    ) -> BracketOrder
+
+    def get_bracket(self, bracket_id: str) -> BracketOrder | None
+    def get_active_brackets(self) -> list[BracketOrder]
+    def get_all_brackets(self) -> list[BracketOrder]
+    async def cancel_bracket(self, bracket_id: str) -> bool
+    async def wire_events(self) -> None
+    async def unwire_events(self) -> None
+```
+
+### BracketOrder
+
+`trading_platform.bracket.models.BracketOrder`
+
+```python
+class BracketOrder(BaseModel):
+    bracket_id: str
+    symbol: str
+    quantity: int
+    entry_type: OrderType
+    entry_limit_price: Decimal | None = None
+    stop_loss_price: Decimal
+    take_profit_price: Decimal
+    state: BracketState = BracketState.PENDING_ENTRY
+    entry_order_id: str | None = None
+    stop_loss_order_id: str | None = None
+    take_profit_order_id: str | None = None
+    entry_fill_price: Decimal | None = None
+    exit_fill_price: Decimal | None = None
+    created_at: datetime
+    entry_filled_at: datetime | None = None
+    completed_at: datetime | None = None
+```
+
+### BracketState
+
+`trading_platform.bracket.enums.BracketState`
+
+```python
+class BracketState(StrEnum):
+    PENDING_ENTRY = "pending_entry"
+    ENTRY_PLACED = "entry_placed"
+    ENTRY_FILLED = "entry_filled"
+    STOP_LOSS_PLACED = "stop_loss_placed"
+    MONITORING = "monitoring"
+    TAKE_PROFIT_TRIGGERED = "take_profit_triggered"
+    TAKE_PROFIT_FILLED = "take_profit_filled"
+    STOPPED_OUT = "stopped_out"
+    CANCELED = "canceled"
+    ENTRY_REJECTED = "entry_rejected"
+    ERROR = "error"
+
+TERMINAL_STATES = frozenset({
+    BracketState.TAKE_PROFIT_FILLED,
+    BracketState.STOPPED_OUT,
+    BracketState.CANCELED,
+    BracketState.ENTRY_REJECTED,
+    BracketState.ERROR,
+})
+```
+
+### BracketChannel
+
+`trading_platform.bracket.enums.BracketChannel`
+
+```python
+class BracketChannel(StrEnum):
+    BRACKET_ENTRY_FILLED = "bracket.entry.filled"
+    BRACKET_STOP_PLACED = "bracket.stop.placed"
+    BRACKET_STOPPED_OUT = "bracket.stopped_out"
+    BRACKET_TAKE_PROFIT_TRIGGERED = "bracket.take_profit.triggered"
+    BRACKET_TAKE_PROFIT_FILLED = "bracket.take_profit.filled"
+    BRACKET_CANCELED = "bracket.canceled"
+    BRACKET_ERROR = "bracket.error"
+    BRACKET_STATE_CHANGE = "bracket.state_change"
+```
+
+---
+
 ## Strategy
 
 ### Strategy (ABC)
@@ -372,6 +469,16 @@ class StrategyContext:
     def get_positions(self) -> list[Position]
     async def submit_order(self, order: Order) -> Any
     async def cancel_order(self, order_id: str) -> Any
+    async def submit_bracket_order(
+        self,
+        symbol: str,
+        quantity: int,
+        entry_type: OrderType,
+        stop_loss_price: Decimal,
+        take_profit_price: Decimal,
+        entry_limit_price: Decimal | None = None,
+    ) -> BracketOrder | None
+    async def cancel_bracket_order(self, bracket_id: str) -> bool
 ```
 
 ### StrategyManager

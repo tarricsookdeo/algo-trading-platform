@@ -16,6 +16,7 @@ import uvicorn
 
 from trading_platform.adapters.public_com.adapter import PublicComExecAdapter
 from trading_platform.adapters.public_com.config import PublicComConfig
+from trading_platform.bracket.manager import BracketOrderManager
 from trading_platform.core.config import load_settings
 from trading_platform.core.enums import Channel
 from trading_platform.core.events import EventBus
@@ -120,11 +121,16 @@ async def run(args: argparse.Namespace) -> None:
     risk_manager = RiskManager(risk_config, event_bus)
     log.info("risk manager initialized")
 
+    # ── Bracket Order Manager ─────────────────────────────────────────
+    bracket_manager = BracketOrderManager(event_bus=event_bus, exec_adapter=exec_adapter)
+    log.info("bracket order manager initialized")
+
     # ── Strategy Manager ───────────────────────────────────────────────
     strategy_manager = StrategyManager(
         event_bus=event_bus,
         exec_adapter=exec_adapter,
         risk_manager=risk_manager,
+        bracket_manager=bracket_manager,
     )
     log.info("strategy manager initialized")
 
@@ -158,7 +164,9 @@ async def run(args: argparse.Namespace) -> None:
             await exec_adapter.connect()
             log.info("public.com exec adapter connected")
 
-        # Wire strategy manager events and start
+        # Wire bracket and strategy manager events
+        await bracket_manager.wire_events()
+        log.info("bracket order manager events wired")
         await strategy_manager.wire_events()
         log.info("strategy manager events wired")
 
@@ -196,6 +204,7 @@ async def run(args: argparse.Namespace) -> None:
         log.info("shutting down platform")
         await strategy_manager.stop_all()
         await strategy_manager.unwire_events()
+        await bracket_manager.unwire_events()
         await ws_manager.stop()
         if exec_adapter:
             await exec_adapter.disconnect()
