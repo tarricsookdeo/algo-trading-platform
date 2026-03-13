@@ -9,8 +9,10 @@ This example shows three subscription patterns:
 2. Multi-channel subscription (all execution events)
 3. Wildcard subscription (every event on every channel)
 
+Data flows in via the DataManager — either from CSV files or through
+the REST/WebSocket ingestion endpoints from an external feed.
+
 Prerequisites:
-    - Set ALPACA_API_KEY and ALPACA_API_SECRET in your .env file
     - pip install -e .
 
 Usage:
@@ -21,14 +23,86 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import signal
+from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from typing import Any
 
-from trading_platform.adapters.alpaca.adapter import AlpacaDataAdapter
-from trading_platform.adapters.alpaca.config import AlpacaConfig
 from trading_platform.core.enums import Channel
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
+from trading_platform.core.models import Bar, QuoteTick, TradeTick
+from trading_platform.data import DataConfig, DataManager, DataProvider
+
+
+class SimulatedFeedProvider(DataProvider):
+    """Generates random bars, quotes, and trades for demonstration."""
+
+    def __init__(self, symbols: list[str], interval: float = 1.0) -> None:
+        self._symbols = symbols
+        self._interval = interval
+        self._connected = False
+        self._prices: dict[str, float] = {}
+
+    @property
+    def name(self) -> str:
+        return "simulated-feed"
+
+    async def connect(self) -> None:
+        self._prices = {s: 100.0 + random.random() * 200 for s in self._symbols}
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        self._connected = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def stream_bars(self, symbols: list[str]) -> AsyncIterator[Bar]:
+        while self._connected:
+            for symbol in self._symbols:
+                price = self._prices[symbol]
+                change = random.uniform(-1.0, 1.0)
+                yield Bar(
+                    symbol=symbol,
+                    open=round(price, 2),
+                    high=round(price + abs(change) + 0.2, 2),
+                    low=round(price - abs(change) - 0.2, 2),
+                    close=round(price + change, 2),
+                    volume=float(random.randint(1000, 50000)),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                self._prices[symbol] = price + change
+            await asyncio.sleep(self._interval)
+
+    async def stream_quotes(self, symbols: list[str]) -> AsyncIterator[QuoteTick]:
+        while self._connected:
+            for symbol in self._symbols:
+                price = self._prices.get(symbol, 150.0)
+                spread = random.uniform(0.01, 0.05)
+                yield QuoteTick(
+                    symbol=symbol,
+                    bid_price=round(price, 2),
+                    bid_size=float(random.randint(1, 50) * 100),
+                    ask_price=round(price + spread, 2),
+                    ask_size=float(random.randint(1, 50) * 100),
+                    timestamp=datetime.now(timezone.utc),
+                )
+            await asyncio.sleep(self._interval * 0.5)
+
+    async def stream_trades(self, symbols: list[str]) -> AsyncIterator[TradeTick]:
+        while self._connected:
+            symbol = random.choice(self._symbols)
+            price = self._prices.get(symbol, 150.0)
+            yield TradeTick(
+                symbol=symbol,
+                price=round(price + random.uniform(-0.1, 0.1), 2),
+                size=float(random.randint(1, 500)),
+                timestamp=datetime.now(timezone.utc),
+            )
+            await asyncio.sleep(self._interval * 0.3)
 
 
 async def main() -> None:
@@ -43,8 +117,11 @@ async def main() -> None:
     async def on_quote(channel: str, event: Any) -> None:
         nonlocal quote_count
         quote_count += 1
-        if quote_count <= 5:  # Only print first 5 quotes
-            print(f"[QUOTE] {event.symbol}: bid={event.bid_price} ask={event.ask_price}")
+        if quote_count <= 5:
+            if isinstance(event, dict):
+                print(f"[QUOTE] {event.get('symbol')}: bid={event.get('bid_price')} ask={event.get('ask_price')}")
+            else:
+                print(f"[QUOTE] {event.symbol}: bid={event.bid_price} ask={event.ask_price}")
         elif quote_count == 6:
             print("[QUOTE] ... (suppressing further quote output)")
 
@@ -52,10 +129,16 @@ async def main() -> None:
 
     # ── Pattern 2: Multi-channel subscription ──────────────────────────
     async def on_trade(channel: str, event: Any) -> None:
-        print(f"[TRADE] {event.symbol}: price={event.price} size={event.size}")
+        if isinstance(event, dict):
+            print(f"[TRADE] {event.get('symbol')}: price={event.get('price')} size={event.get('size')}")
+        else:
+            print(f"[TRADE] {event.symbol}: price={event.price} size={event.size}")
 
     async def on_bar(channel: str, event: Any) -> None:
-        print(f"[BAR] {event.symbol}: O={event.open} H={event.high} L={event.low} C={event.close} V={event.volume}")
+        if isinstance(event, dict):
+            print(f"[BAR] {event.get('symbol')}: O={event.get('open')} H={event.get('high')} L={event.get('low')} C={event.get('close')} V={event.get('volume')}")
+        else:
+            print(f"[BAR] {event.symbol}: O={event.open} H={event.high} L={event.low} C={event.close} V={event.volume}")
 
     async def on_system(channel: str, event: Any) -> None:
         if isinstance(event, dict):
@@ -89,19 +172,15 @@ async def main() -> None:
 
     metrics_task = asyncio.create_task(report_metrics())
 
-    # ── Connect and subscribe to market data ───────────────────────────
-    alpaca_config = AlpacaConfig(
-        api_key="YOUR_ALPACA_API_KEY",
-        api_secret="YOUR_ALPACA_API_SECRET",
-        feed="sip",
-    )
-    adapter = AlpacaDataAdapter(alpaca_config, event_bus)
-
+    # ── Start data feed ────────────────────────────────────────────────
     symbols = ["AAPL", "MSFT"]
-    await adapter.connect()
-    await adapter.subscribe_quotes(symbols)
-    await adapter.subscribe_trades(symbols)
-    await adapter.subscribe_bars(symbols)
+    config = DataConfig()
+    data_manager = DataManager(event_bus, config)
+
+    provider = SimulatedFeedProvider(symbols, interval=2.0)
+    data_manager.register_provider(provider)
+
+    await data_manager.start()
     log.info("listening to events", symbols=symbols)
 
     # ── Run until Ctrl+C ───────────────────────────────────────────────
@@ -118,7 +197,7 @@ async def main() -> None:
     await shutdown.wait()
 
     metrics_task.cancel()
-    await adapter.disconnect()
+    await data_manager.stop()
 
     # Final summary
     print(f"\nFinal summary:")

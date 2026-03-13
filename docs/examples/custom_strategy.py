@@ -8,10 +8,12 @@ Implements a complete strategy that:
 Demonstrates the full Strategy lifecycle: subclassing, configuration,
 order submission through StrategyContext, and signal publishing.
 
+Data is provided via the DataManager — either from CSV files, the
+ingestion API, or a custom DataProvider. No external data vendor required.
+
 Prerequisites:
-    - Set ALPACA_API_KEY, ALPACA_API_SECRET in .env (for market data)
-    - Optionally set PUBLIC_API_SECRET, PUBLIC_ACCOUNT_ID (for execution)
     - pip install -e .
+    - Prepare CSV data files, or run alongside an external feed script
 
 Usage:
     python docs/examples/custom_strategy.py
@@ -24,12 +26,11 @@ import signal
 from collections import defaultdict, deque
 from typing import Any
 
-from trading_platform.adapters.alpaca.adapter import AlpacaDataAdapter
-from trading_platform.adapters.alpaca.config import AlpacaConfig
 from trading_platform.core.enums import OrderSide, OrderType
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
 from trading_platform.core.models import Bar, Order, QuoteTick, TradeTick
+from trading_platform.data import CsvBarProvider, DataConfig, DataManager
 from trading_platform.risk.manager import RiskManager
 from trading_platform.risk.models import RiskConfig
 from trading_platform.strategy.base import Strategy
@@ -66,20 +67,16 @@ class MeanReversionStrategy(Strategy):
         pass  # This strategy uses bars, not trades
 
     async def on_bar(self, bar: Bar) -> None:
-        # Filter to our target symbols
         if self.symbols and bar.symbol not in self.symbols:
             return
 
-        # Accumulate closing prices
         self._prices[bar.symbol].append(bar.close)
         prices = list(self._prices[bar.symbol])
 
-        # Wait until we have a full window
         if len(prices) < self.window:
             self._log.debug("buffering", symbol=bar.symbol, count=len(prices))
             return
 
-        # Compute Z-score
         mean = sum(prices) / len(prices)
         std = (sum((p - mean) ** 2 for p in prices) / len(prices)) ** 0.5
         if std == 0:
@@ -95,21 +92,17 @@ class MeanReversionStrategy(Strategy):
             z=f"{z_score:.2f}",
         )
 
-        # Generate trading signals
         if z_score < -self.z_threshold:
             await self._submit(bar.symbol, OrderSide.BUY, f"z={z_score:.2f}")
         elif z_score > self.z_threshold:
             await self._submit(bar.symbol, OrderSide.SELL, f"z={z_score:.2f}")
 
     async def _submit(self, symbol: str, side: OrderSide, reason: str) -> None:
-        """Submit an order and publish a signal event."""
-        # Publish signal to the event bus (visible on dashboard)
         await self.event_bus.publish("strategy.signal", {
             "strategy_id": self.name,
             "signal": {"symbol": symbol, "side": str(side), "reason": reason},
         })
 
-        # Submit order through context (applies risk checks first)
         if not self.context:
             self._log.warning("no context — order not submitted")
             return
@@ -133,18 +126,18 @@ async def main() -> None:
     setup_logging(level="INFO")
     log = get_logger("example.custom_strategy")
 
-    # Core event bus
     event_bus = EventBus()
 
-    # Alpaca data adapter (market data only, no execution)
-    alpaca_config = AlpacaConfig(
-        api_key="YOUR_ALPACA_API_KEY",
-        api_secret="YOUR_ALPACA_API_SECRET",
-        feed="sip",
-    )
-    adapter = AlpacaDataAdapter(alpaca_config, event_bus)
+    # ── Data: load bars from CSV (or use the ingestion API) ────────────
+    # Point csv_directory at your data files, or leave empty and use
+    # the REST/WS ingestion endpoints to stream data in from outside.
+    data_config = DataConfig(csv_directory="backtest_data", replay_speed=0.0)
+    data_manager = DataManager(event_bus, data_config)
 
-    # Risk manager with conservative settings
+    csv_provider = CsvBarProvider("backtest_data", replay_speed=0.0)
+    data_manager.register_provider(csv_provider)
+
+    # ── Risk manager with conservative settings ────────────────────────
     risk_config = RiskConfig(
         max_position_size=100.0,
         max_order_value=5000.0,
@@ -175,12 +168,10 @@ async def main() -> None:
     )
     strategy_manager.register(strategy)
 
-    # Connect, subscribe, and start
-    await adapter.connect()
-    await adapter.subscribe_bars(symbols)
-    await adapter.subscribe_quotes(symbols)
+    # Start everything
     await strategy_manager.wire_events()
     await strategy_manager.start_strategy("mean-reversion-demo")
+    await data_manager.start()
     log.info("strategy running — press Ctrl+C to stop")
 
     # Wait for shutdown
@@ -196,9 +187,9 @@ async def main() -> None:
     await shutdown.wait()
 
     # Cleanup
+    await data_manager.stop()
     await strategy_manager.stop_all()
     await strategy_manager.unwire_events()
-    await adapter.disconnect()
     log.info("shutdown complete")
 
 

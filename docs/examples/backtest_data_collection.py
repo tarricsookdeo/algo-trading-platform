@@ -1,19 +1,18 @@
 """Backtest data collection example.
 
-Uses the Alpaca REST client to fetch historical bars for one or more
-symbols and saves them to CSV files for offline analysis and
-backtesting.
+Demonstrates how to create CSV files in the platform's expected format
+and load them using CsvBarProvider for backtesting. Also shows how to
+send bars to a running platform instance via the REST ingestion API.
 
 Demonstrates:
-- AlpacaClient initialization and lifecycle
-- Fetching historical bars with date ranges
-- Automatic pagination for large datasets
-- Saving data to CSV with pandas (or manual CSV if pandas unavailable)
+- Creating CSV files in the expected format
+- Loading CSVs with CsvBarProvider
+- Streaming bars through the DataManager
+- Sending historical bars to a live platform via REST
 
 Prerequisites:
-    - Set ALPACA_API_KEY and ALPACA_API_SECRET in your .env file
     - pip install -e .
-    - Optional: pip install pandas (for DataFrame output)
+    - Optional: pip install httpx (for REST ingestion example)
 
 Usage:
     python docs/examples/backtest_data_collection.py
@@ -23,133 +22,104 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import os
-from datetime import datetime, timezone
+import random
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from trading_platform.adapters.alpaca.client import AlpacaClient
-from trading_platform.adapters.alpaca.config import AlpacaConfig
+from trading_platform.core.enums import Channel
+from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger, setup_logging
+from trading_platform.data import CsvBarProvider, DataConfig, DataManager
 
 
-def save_bars_csv(bars: list[dict], filepath: Path) -> None:
-    """Save bars to a CSV file."""
-    if not bars:
-        print(f"  No data for {filepath.name}")
-        return
+def generate_sample_csv(filepath: Path, symbol: str, num_bars: int = 100) -> None:
+    """Generate a sample CSV file with synthetic OHLCV data."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    fieldnames = ["t", "o", "h", "l", "c", "v", "vw", "n"]
+    price = 150.0 + random.random() * 100
+    start_time = datetime(2026, 3, 1, 9, 30, tzinfo=timezone.utc)
+
     with open(filepath, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(bars)
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "symbol", "open", "high", "low", "close", "volume"])
+        for i in range(num_bars):
+            ts = start_time + timedelta(minutes=i)
+            change = random.uniform(-1.0, 1.0)
+            o = round(price, 2)
+            h = round(price + abs(change) + random.uniform(0, 0.5), 2)
+            l = round(price - abs(change) - random.uniform(0, 0.5), 2)
+            c = round(price + change, 2)
+            v = random.randint(1000, 50000)
+            writer.writerow([ts.isoformat(), symbol, o, h, l, c, v])
+            price = c
 
-    print(f"  Saved {len(bars)} bars → {filepath}")
-
-
-def save_bars_pandas(bars: list[dict], filepath: Path) -> None:
-    """Save bars to CSV using pandas (if available)."""
-    try:
-        import pandas as pd
-    except ImportError:
-        save_bars_csv(bars, filepath)
-        return
-
-    if not bars:
-        print(f"  No data for {filepath.name}")
-        return
-
-    df = pd.DataFrame(bars)
-    # Rename Alpaca's short column names to readable ones
-    column_map = {
-        "t": "timestamp",
-        "o": "open",
-        "h": "high",
-        "l": "low",
-        "c": "close",
-        "v": "volume",
-        "vw": "vwap",
-        "n": "trade_count",
-    }
-    df = df.rename(columns=column_map)
-
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.set_index("timestamp").sort_index()
-
-    df.to_csv(filepath)
-    print(f"  Saved {len(df)} bars → {filepath}")
-    print(f"  Date range: {df.index.min()} to {df.index.max()}")
-    print(f"  Columns: {list(df.columns)}")
+    print(f"  Generated {num_bars} bars -> {filepath}")
 
 
 async def main() -> None:
     setup_logging(level="INFO")
     log = get_logger("example.backtest_data")
 
-    # ── Configure ──────────────────────────────────────────────────────
-    config = AlpacaConfig(
-        api_key="YOUR_ALPACA_API_KEY",
-        api_secret="YOUR_ALPACA_API_SECRET",
-    )
-
     symbols = ["AAPL", "MSFT", "TSLA"]
-    timeframe = "1Min"       # 1-minute bars
-    start = "2026-03-01"     # Start date (ISO format)
-    end = "2026-03-10"       # End date (ISO format)
-
     output_dir = Path("backtest_data")
-    output_dir.mkdir(exist_ok=True)
 
-    # ── Fetch data ─────────────────────────────────────────────────────
-    client = AlpacaClient(config)
-    await client.start()
-    log.info("Alpaca REST client started")
+    # ── Step 1: Generate sample CSV files ──────────────────────────────
+    print("Generating sample CSV data...")
+    for symbol in symbols:
+        filepath = output_dir / f"{symbol}_1min.csv"
+        generate_sample_csv(filepath, symbol, num_bars=200)
 
-    try:
-        for symbol in symbols:
-            print(f"\nFetching {timeframe} bars for {symbol} ({start} to {end})...")
+    # ── Step 2: Load CSVs using CsvBarProvider and DataManager ─────────
+    print("\nLoading CSVs into the platform...")
+    event_bus = EventBus()
+    bar_count = 0
 
-            bars = await client.get_bars(
-                symbol=symbol,
-                timeframe=timeframe,
-                start=start,
-                end=end,
-                limit=10000,       # max per page (auto-paginates)
-                feed="sip",        # SIP for full market data
-                adjustment="raw",  # "raw", "split", "dividend", or "all"
-            )
+    async def on_bar(channel: str, event: dict) -> None:
+        nonlocal bar_count
+        bar_count += 1
+        if bar_count <= 5:
+            sym = event.get("symbol", "?") if isinstance(event, dict) else event.symbol
+            close = event.get("close", 0) if isinstance(event, dict) else event.close
+            print(f"  [BAR] {sym}: close={close}")
+        elif bar_count == 6:
+            print("  [BAR] ... (suppressing further output)")
 
-            filepath = output_dir / f"{symbol}_{timeframe}_{start}_{end}.csv"
-            save_bars_pandas(bars, filepath)
+    await event_bus.subscribe(Channel.BAR, on_bar)
 
-        # ── Also fetch daily bars for longer-term analysis ─────────────
-        print(f"\nFetching daily bars for the same symbols (past 1 year)...")
-        for symbol in symbols:
-            bars = await client.get_bars(
-                symbol=symbol,
-                timeframe="1Day",
-                start="2025-03-01",
-                end="2026-03-10",
-                feed="sip",
-                adjustment="split",  # adjust for stock splits
-            )
+    config = DataConfig(csv_directory=str(output_dir), replay_speed=0.0)
+    data_manager = DataManager(event_bus, config)
 
-            filepath = output_dir / f"{symbol}_1Day_1year.csv"
-            save_bars_pandas(bars, filepath)
+    # Register a provider for the whole directory
+    csv_provider = CsvBarProvider(str(output_dir), replay_speed=0.0)
+    data_manager.register_provider(csv_provider)
 
-        # ── Fetch latest snapshot ──────────────────────────────────────
-        print(f"\nFetching current snapshots...")
-        for symbol in symbols:
-            snapshot = await client.get_snapshot(symbol, feed="sip")
-            latest = snapshot.get("latestTrade", {})
-            print(f"  {symbol}: last trade @ ${latest.get('p', 'N/A')}")
+    await data_manager.start()
 
-    finally:
-        await client.close()
-        log.info("client closed")
+    # Give stream tasks time to complete (instant replay)
+    await asyncio.sleep(1.0)
+    await data_manager.stop()
 
-    print(f"\nAll data saved to {output_dir.resolve()}/")
+    print(f"\nTotal bars processed: {bar_count}")
+    print(f"Total events: {event_bus.total_published}")
+    for ch, count in sorted(event_bus.channel_counts.items()):
+        print(f"  {ch}: {count}")
+
+    # ── Step 3: Show REST ingestion approach ───────────────────────────
+    print("\n--- REST Ingestion Example ---")
+    print("To send bars to a running platform instance:")
+    print("")
+    print("  import httpx")
+    print("  async with httpx.AsyncClient() as client:")
+    print('      resp = await client.post("http://localhost:8080/api/data/bars", json={')
+    print('          "symbol": "AAPL",')
+    print('          "open": 185.50, "high": 186.20,')
+    print('          "low": 185.30, "close": 186.00,')
+    print('          "volume": 125000,')
+    print('          "timestamp": "2026-03-01T09:30:00Z"')
+    print("      })")
+    print('      print(resp.json())  # {"ingested": 1}')
+
+    print(f"\nAll sample data saved to {output_dir.resolve()}/")
 
 
 if __name__ == "__main__":
