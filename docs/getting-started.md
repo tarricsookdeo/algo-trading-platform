@@ -112,11 +112,16 @@ On startup you'll see:
  / ___ \| | (_| | (_) | | || | | (_| | (_| | | | | | (_| |
 /_/   \_\_|\__, |\___/  |_||_|  \__,_|\__,_|_|_| |_|\__, |
            |___/                                     |___/
-           P L A T F O R M   v0.2.0
+           P L A T F O R M   v0.3.0
 
 [info] starting platform  dashboard_port=8080
 [info] data manager started  providers=1
 [info] public.com exec adapter configured
+[info] order router configured  adapters=equity,options,crypto
+[info] greeks provider initialized  refresh_interval=30s
+[info] expiration manager started  auto_close_dte=1
+[info] trailing stop manager ready
+[info] scaled order manager ready
 [info] risk manager initialized
 [info] strategy manager initialized
 [info] strategy manager events wired
@@ -141,6 +146,12 @@ The dashboard displays:
 - **Orders** — Active orders with cancel capability
 - **Strategies** — Registered strategies with start/stop controls
 - **Risk** — Current risk state and violation history
+- **Bracket orders** — Active brackets with state machine and P&L
+- **Trailing stops** — Dynamic stop levels with trail visualization
+- **Scaled orders** — Multi-tranche entry/exit progress
+- **Options greeks** — Portfolio delta, gamma, theta, vega
+- **Expiration countdown** — DTE monitoring for options positions
+- **Crypto positions** — Holdings with fractional quantities
 
 ### 7. Verify Data Ingestion
 
@@ -195,6 +206,11 @@ Tests cover:
 - CSV bar provider loading and replay
 - REST and WebSocket data ingestion
 - Public.com adapter integration
+- Crypto adapter integration
+- Options order model and adapter
+- Trailing stops and scaled orders
+- Greeks risk checks
+- Expiration management
 - Strategy lifecycle and manager
 - Risk checks and violations
 - Dashboard API endpoints
@@ -216,3 +232,9 @@ Press `Ctrl+C` for graceful shutdown. The platform will:
 - [Data Providers & Adapters](adapters.md) — Bring your own data sources
 - [Strategies Guide](strategies.md) — Write your first trading strategy
 - [Risk Management](risk-management.md) — Configure risk controls
+- [Crypto Trading](crypto-trading.md) — Trade crypto via Public.com
+- [Options Trading](options-trading.md) — Options orders and multi-leg strategies
+- [Trailing Stops](trailing-stops.md) — Dynamic trailing stop orders
+- [Scaled Orders](scaled-orders.md) — Multi-tranche entries and exits
+- [Greeks & Risk](greeks-risk.md) — Greeks-aware risk management
+- [Expiration Management](expiration-management.md) — DTE monitoring and auto-close

@@ -57,6 +57,37 @@ The platform starts in **data-only mode** if `PUBLIC_API_SECRET` or `PUBLIC_ACCO
 | `log_level` | string | `"INFO"` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `symbols` | list | `["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]` | Default symbol list for strategies |
 
+### `[crypto]` — Crypto Trading Settings
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `trading_pairs` | list | `["BTC-USD", "ETH-USD"]` | Supported crypto trading pairs |
+| `poll_interval` | float | `2.0` | Order status polling interval in seconds |
+| `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
+
+### `[options]` — Options Trading Settings
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `poll_interval` | float | `2.0` | Order status polling interval in seconds |
+| `portfolio_refresh` | float | `30.0` | Portfolio sync interval in seconds |
+
+### `[options.expiration]` — Expiration Management Settings
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto_close_dte` | int | `1` | Auto-close positions at N DTE to avoid assignment |
+| `alert_dte` | int | `7` | Send alert when position reaches N DTE |
+| `roll_enabled` | bool | `false` | Attempt to roll position to next expiration on auto-close |
+| `roll_target_dte` | int | `30` | Target DTE for rolled positions |
+| `check_interval_seconds` | float | `60.0` | How often to check DTE on positions |
+
+### `[risk.greeks]` — Greeks Risk Limits
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_portfolio_delta` | float | `500.0` | Maximum absolute portfolio delta |
+| `max_portfolio_gamma` | float | `100.0` | Maximum absolute portfolio gamma |
+| `max_daily_theta` | float | `-200.0` | Maximum daily theta decay (negative = max loss from decay) |
+| `max_portfolio_vega` | float | `1000.0` | Maximum absolute portfolio vega |
+| `greeks_refresh_interval_seconds` | float | `30.0` | How often to refresh greeks from broker |
+
 ## Environment Variable Precedence
 
 Environment variables (from `.env` or the shell) take precedence over `config.toml` values for fields that overlap. The Pydantic Settings loader processes them in order:
@@ -164,6 +195,39 @@ csv_directory = "/path/to/csvs"
 
 [platform]
 log_level = "DEBUG"
+```
+
+### Options + Greeks Risk Profile
+
+```toml
+[options]
+poll_interval = 2.0
+portfolio_refresh = 15.0
+
+[options.expiration]
+auto_close_dte = 1
+alert_dte = 7
+roll_enabled = true
+roll_target_dte = 30
+
+[risk.greeks]
+max_portfolio_delta = 500.0
+max_portfolio_gamma = 100.0
+max_daily_theta = -200.0
+max_portfolio_vega = 1000.0
+```
+
+### Crypto Trading Profile
+
+```toml
+[crypto]
+trading_pairs = ["BTC-USD", "ETH-USD", "SOL-USD"]
+poll_interval = 2.0
+portfolio_refresh = 15.0
+
+[risk]
+max_position_size = 5000.0
+max_order_value = 100000.0
 ```
 
 ## CLI Options

@@ -257,6 +257,54 @@ count = bus.subscriber_count  # int
 }
 ```
 
+### Bracket Order Channels
+
+| Channel | Payload | Description |
+|---------|---------|-------------|
+| `bracket.entry.filled` | `{bracket_id, symbol, fill_price}` | Entry order filled |
+| `bracket.stop.placed` | `{bracket_id, stop_price}` | Stop-loss placed |
+| `bracket.stopped_out` | `{bracket_id, fill_price}` | Stop-loss hit |
+| `bracket.take_profit.triggered` | `{bracket_id, trigger_price}` | Take-profit triggered |
+| `bracket.take_profit.filled` | `{bracket_id, fill_price}` | Take-profit filled |
+| `bracket.canceled` | `{bracket_id}` | Bracket canceled |
+| `bracket.error` | `{bracket_id, error}` | Error in bracket lifecycle |
+| `bracket.state_change` | `{bracket_id, old_state, new_state}` | State transition |
+
+### Trailing Stop Channels
+
+| Channel | Payload | Description |
+|---------|---------|-------------|
+| `trailing_stop.placed` | `{trailing_stop_id, symbol, stop_price}` | Initial stop placed |
+| `trailing_stop.updated` | `{trailing_stop_id, old_price, new_price, highest_price}` | Stop price ratcheted up |
+| `trailing_stop.completed` | `{trailing_stop_id, fill_price}` | Stop triggered and filled |
+| `trailing_stop.canceled` | `{trailing_stop_id}` | Trailing stop canceled |
+| `trailing_stop.error` | `{trailing_stop_id, error}` | Error |
+| `trailing_stop.state_change` | `{trailing_stop_id, old_state, new_state}` | State transition |
+
+### Scaled Order Channels
+
+| Channel | Payload | Description |
+|---------|---------|-------------|
+| `scaled.exit.placed` | `{scaled_id, symbol, tranches}` | Scaled exit created |
+| `scaled.exit.tranche_filled` | `{scaled_id, tranche_index, price, quantity}` | Exit tranche filled |
+| `scaled.exit.completed` | `{scaled_id}` | All exit tranches filled |
+| `scaled.exit.stopped_out` | `{scaled_id, fill_price}` | Stop-loss hit on remaining position |
+| `scaled.entry.placed` | `{scaled_id, symbol, tranches}` | Scaled entry created |
+| `scaled.entry.tranche_filled` | `{scaled_id, tranche_index, price, quantity}` | Entry tranche filled |
+| `scaled.entry.completed` | `{scaled_id}` | All entry tranches filled |
+| `scaled.stop.adjusted` | `{scaled_id, new_stop_price}` | Stop-loss adjusted after tranche fill |
+| `scaled.state_change` | `{scaled_id, old_state, new_state}` | State transition |
+| `scaled.error` | `{scaled_id, error}` | Error |
+| `scaled.canceled` | `{scaled_id}` | Scaled order canceled |
+
+### Options & Expiration Channels
+
+| Channel | Payload | Description |
+|---------|---------|-------------|
+| `options.expiration.warning` | `{symbol, underlying, dte, expiration_date}` | Position approaching expiration |
+| `options.position.auto_closed` | `{symbol, underlying, quantity, dte}` | Position auto-closed at DTE threshold |
+| `options.position.rolled` | `{symbol, new_symbol, underlying}` | Position rolled to next expiration |
+
 ## Patterns for Using the Event Bus
 
 ### Listening to All Market Data

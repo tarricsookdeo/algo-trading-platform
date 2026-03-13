@@ -85,7 +85,34 @@ class DashboardWSManager:
             payload = {"type": channel, "data": event}
         else:
             payload = {"type": channel, "data": str(event)}
+
+        # Annotate with category for client-side routing
+        category = self._categorize_event(channel)
+        if category:
+            payload["category"] = category
+
         await self.broadcast(payload)
+
+    @staticmethod
+    def _categorize_event(channel: str) -> str | None:
+        """Map event channels to UI categories for client-side routing."""
+        if channel.startswith("trailing_stop."):
+            return "trailing_stop"
+        if channel.startswith("scaled."):
+            return "scaled_order"
+        if channel.startswith("bracket."):
+            return "bracket"
+        if channel.startswith("options.expiration.") or channel.startswith("options.position."):
+            return "expiration"
+        if channel in ("quote", "trade", "bar"):
+            return "market_data"
+        if channel.startswith("execution."):
+            return "execution"
+        if channel.startswith("risk."):
+            return "risk"
+        if channel.startswith("strategy."):
+            return "strategy"
+        return None
 
     async def _metrics_loop(self) -> None:
         """Send system metrics every 2 seconds."""

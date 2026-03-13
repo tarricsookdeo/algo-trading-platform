@@ -19,6 +19,8 @@
     --blue: #58a6ff;
     --yellow: #d29922;
     --orange: #db6d28;
+    --purple: #bc8cff;
+    --cyan: #39d2c0;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -33,11 +35,10 @@
   .container {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
-    grid-template-rows: auto auto 1fr 1fr 1fr;
+    grid-template-rows: auto auto 1fr 1fr 1fr 1fr;
     gap: 8px;
     padding: 8px;
-    height: 100vh;
-    max-height: 100vh;
+    min-height: 100vh;
   }
   .header { grid-column: 1 / -1; }
   .feed-status { grid-column: 1 / -1; }
@@ -49,7 +50,10 @@
   .strategy-panel { grid-column: 3 / 4; grid-row: 4; }
   .risk-panel { grid-column: 1 / 2; grid-row: 5; }
   .pnl-panel { grid-column: 2 / 3; grid-row: 5; }
-  .right-col { grid-column: 3 / 4; grid-row: 5; display: flex; flex-direction: column; gap: 8px; }
+  .orders-panel { grid-column: 3 / 4; grid-row: 5; }
+  .brackets-panel { grid-column: 1 / 2; grid-row: 6; }
+  .trailing-panel { grid-column: 2 / 3; grid-row: 6; }
+  .options-panel { grid-column: 3 / 4; grid-row: 6; }
 
   /* ── Panel ──────────────────────────────────────────── */
   .panel {
@@ -59,6 +63,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    min-height: 200px;
   }
   .panel-header {
     padding: 8px 12px;
@@ -192,7 +197,56 @@
   .pnl-negative { color: var(--red); }
   .pnl-chart-container { height: 120px; }
 
+  /* ── Bracket Orders ─────────────────────────────────── */
+  .bracket-row { padding: 6px; border-bottom: 1px solid var(--bg-tertiary); font-size: 12px; }
+  .bracket-row .bracket-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .bracket-row .bracket-sym { font-weight: 600; }
+  .bracket-row .bracket-detail { display: flex; gap: 12px; font-size: 11px; color: var(--text-secondary); }
+  .bracket-state-badge { padding: 1px 6px; border-radius: 3px; font-size: 10px; text-transform: uppercase; }
+  .bracket-state-badge.monitoring { background: rgba(88,166,255,0.2); color: var(--blue); }
+  .bracket-state-badge.stopped_out { background: rgba(255,68,68,0.2); color: var(--red); }
+  .bracket-state-badge.take_profit_filled { background: rgba(0,214,114,0.2); color: var(--green); }
+  .bracket-state-badge.pending_entry, .bracket-state-badge.entry_placed { background: rgba(210,153,34,0.2); color: var(--yellow); }
+  .bracket-state-badge.canceled, .bracket-state-badge.error { background: rgba(255,68,68,0.2); color: var(--red); }
+
+  /* ── Trailing Stops ─────────────────────────────────── */
+  .ts-row { padding: 6px; border-bottom: 1px solid var(--bg-tertiary); font-size: 12px; }
+  .ts-row .ts-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .ts-row .ts-sym { font-weight: 600; }
+  .ts-row .ts-detail { font-size: 11px; color: var(--text-secondary); }
+  .ts-bar-bg { background: var(--bg-tertiary); border-radius: 3px; height: 6px; overflow: hidden; margin-top: 4px; }
+  .ts-bar-fill { height: 100%; border-radius: 3px; background: var(--cyan); }
+
+  /* ── Options / Greeks / Expiration Panel ──────────────── */
+  .greeks-summary { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+  .greek-stat { background: var(--bg-tertiary); border-radius: 4px; padding: 6px 4px; text-align: center; }
+  .greek-stat .label { font-size: 9px; color: var(--text-secondary); text-transform: uppercase; }
+  .greek-stat .value { font-size: 14px; font-weight: 700; color: var(--purple); }
+  .option-pos-row { display: flex; justify-content: space-between; padding: 3px 6px; border-bottom: 1px solid var(--bg-tertiary); font-size: 11px; }
+  .option-pos-row .sym { font-weight: 600; min-width: 50px; }
+  .option-pos-row .greeks { display: flex; gap: 8px; color: var(--text-secondary); }
+  .dte-badge { padding: 1px 4px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+  .dte-badge.warn { background: rgba(210,153,34,0.2); color: var(--yellow); }
+  .dte-badge.danger { background: rgba(255,68,68,0.2); color: var(--red); }
+  .dte-badge.ok { background: rgba(0,214,114,0.1); color: var(--green); }
+
+  /* ── Scaled Orders ──────────────────────────────────── */
+  .scaled-row { padding: 6px; border-bottom: 1px solid var(--bg-tertiary); font-size: 12px; }
+  .scaled-row .scaled-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .scaled-row .scaled-sym { font-weight: 600; }
+  .tranche-bar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; gap: 1px; margin-top: 4px; }
+  .tranche-bar .tranche-seg { flex: 1; transition: background 0.3s; }
+  .tranche-bar .tranche-seg.filled { background: var(--green); }
+  .tranche-bar .tranche-seg.pending { background: var(--bg-tertiary); }
+
   .placeholder { display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-style: italic; height: 100%; font-size: 12px; }
+
+  /* ── Tabs within panel ────────────────────────────────── */
+  .panel-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .panel-tab { padding: 6px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; background: none; border-top: none; border-left: none; border-right: none; font-family: inherit; }
+  .panel-tab.active { color: var(--text-primary); border-bottom-color: var(--blue); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
 </style>
 </head>
 <body>
@@ -314,11 +368,49 @@
     </div>
   </div>
 
-  <!-- Right column: orders -->
-  <div class="right-col">
-    <div class="panel" style="flex:1">
-      <div class="panel-header">Open Orders <span id="orderCount" style="color:var(--text-muted)">0</span></div>
-      <div class="panel-body" id="ordersBody"><div class="placeholder" id="orderPlaceholder">No open orders</div></div>
+  <!-- Open Orders -->
+  <div class="panel orders-panel">
+    <div class="panel-header">Open Orders <span id="orderCount" style="color:var(--text-muted)">0</span></div>
+    <div class="panel-body" id="ordersBody"><div class="placeholder" id="orderPlaceholder">No open orders</div></div>
+  </div>
+
+  <!-- Bracket Orders + Trailing Stops + Scaled Orders -->
+  <div class="panel brackets-panel">
+    <div class="panel-header">Bracket Orders <span id="bracketCount" style="color:var(--text-muted)">0</span></div>
+    <div class="panel-body" id="bracketsBody"><div class="placeholder">No bracket orders</div></div>
+  </div>
+
+  <!-- Trailing Stops + Scaled Orders -->
+  <div class="panel trailing-panel">
+    <div class="panel-tabs">
+      <button class="panel-tab active" data-tab="trailing">Trailing Stops</button>
+      <button class="panel-tab" data-tab="scaled">Scaled Orders</button>
+    </div>
+    <div class="panel-body">
+      <div class="tab-content active" id="tabTrailing"><div class="placeholder">No trailing stops</div></div>
+      <div class="tab-content" id="tabScaled"><div class="placeholder">No scaled orders</div></div>
+    </div>
+  </div>
+
+  <!-- Options / Greeks / Expiration -->
+  <div class="panel options-panel">
+    <div class="panel-tabs">
+      <button class="panel-tab active" data-tab="greeks">Greeks</button>
+      <button class="panel-tab" data-tab="expiry">Expirations</button>
+    </div>
+    <div class="panel-body">
+      <div class="tab-content active" id="tabGreeks">
+        <div class="greeks-summary">
+          <div class="greek-stat"><div class="label">Delta</div><div class="value" id="gDelta">--</div></div>
+          <div class="greek-stat"><div class="label">Gamma</div><div class="value" id="gGamma">--</div></div>
+          <div class="greek-stat"><div class="label">Theta</div><div class="value" id="gTheta">--</div></div>
+          <div class="greek-stat"><div class="label">Vega</div><div class="value" id="gVega">--</div></div>
+        </div>
+        <div id="greeksPositions"><div class="placeholder">No options positions</div></div>
+      </div>
+      <div class="tab-content" id="tabExpiry">
+        <div id="expiryPositions"><div class="placeholder">No expiring positions</div></div>
+      </div>
     </div>
   </div>
 </div>
@@ -349,6 +441,19 @@ function initPnlChart() {
   });
 }
 
+// ── Tab switching ──────────────────────────────────────────────────
+document.querySelectorAll('.panel-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const panel = tab.closest('.panel');
+    panel.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const targetId = 'tab' + tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1);
+    panel.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+    const target = document.getElementById(targetId);
+    if (target) target.classList.add('active');
+  });
+});
+
 // ── WebSocket ──────────────────────────────────────────────────────
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -358,6 +463,7 @@ function connectWS() {
     document.getElementById('connText').textContent = 'Connected';
     addLog('info', 'Dashboard WebSocket connected');
     refreshPortfolio(); refreshStrategies(); refreshRisk(); refreshPnl(); refreshOrders();
+    refreshBrackets(); refreshTrailingStops(); refreshScaledOrders(); refreshGreeks(); refreshExpirations();
   };
   ws.onclose = () => {
     document.getElementById('connDot').className = 'status-dot disconnected';
@@ -370,7 +476,7 @@ function connectWS() {
 }
 
 function handleMessage(msg) {
-  const {type, data} = msg;
+  const {type, data, category} = msg;
   if (type === 'quote') onQuote(data);
   else if (type === 'trade') onTrade(data);
   else if (type === 'bar') onBar(data);
@@ -384,6 +490,11 @@ function handleMessage(msg) {
   else if (type === 'strategy.lifecycle') onStrategyEvent(data);
   else if (type === 'strategy.signal') onStrategySignal(data);
   else if (type.startsWith('risk.')) onRiskEvent(type, data);
+  // New event categories
+  else if (category === 'bracket' || type.startsWith('bracket.')) onBracketEvent(type, data);
+  else if (category === 'trailing_stop' || type.startsWith('trailing_stop.')) onTrailingStopEvent(type, data);
+  else if (category === 'scaled_order' || type.startsWith('scaled.')) onScaledOrderEvent(type, data);
+  else if (category === 'expiration' || type.startsWith('options.expiration.') || type.startsWith('options.position.')) onExpirationEvent(type, data);
 }
 
 // ── Market Data ────────────────────────────────────────────────────
@@ -431,7 +542,11 @@ function renderPositions(positions) {
   let html = '';
   positions.forEach(p => {
     const cls = (p.unrealized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
-    html += `<div class="position-row"><span class="sym">${p.symbol}</span><span class="qty">${p.quantity}</span><span class="val">$${fmtPrice(p.market_value)}</span><span class="pnl ${cls}">$${fmtPrice(p.unrealized_pnl)}</span></div>`;
+    const qty = Number(p.quantity);
+    const qtyStr = Number.isInteger(qty) ? qty.toString() : qty.toFixed(6);
+    const assetBadge = p.asset_class === 'CRYPTO' ? '<span style="color:var(--orange);font-size:10px"> CRYPTO</span>' :
+                       p.asset_class === 'OPTION' ? '<span style="color:var(--purple);font-size:10px"> OPT</span>' : '';
+    html += `<div class="position-row"><span class="sym">${p.symbol}${assetBadge}</span><span class="qty">${qtyStr}</span><span class="val">$${fmtPrice(p.market_value)}</span><span class="pnl ${cls}">$${fmtPrice(p.unrealized_pnl)}</span></div>`;
   });
   body.innerHTML = html;
 }
@@ -504,20 +619,16 @@ function renderRisk(risk) {
   if (risk.is_halted) banner.textContent = 'TRADING HALTED: ' + (risk.halt_reason || '');
   const bars = document.getElementById('riskBars');
   let html = '';
-  // Daily loss
   const pnl = risk.daily_pnl||0, ll = risk.daily_loss_limit||-5000;
   const pnlPct = ll<0 ? Math.min(100, Math.abs(pnl/ll)*100) : 0;
   const pnlC = pnlPct>80?'var(--red)':pnlPct>50?'var(--yellow)':'var(--green)';
   html += `<div class="risk-item"><div class="risk-label"><span>Daily Loss</span><span>$${pnl.toFixed(0)} / $${ll.toFixed(0)}</span></div><div class="risk-bar-bg"><div class="risk-bar-fill" style="width:${pnlPct}%;background:${pnlC}"></div></div></div>`;
-  // Open orders
   const oo = risk.open_order_count||0, mo = risk.max_open_orders||20;
   const ooPct = Math.min(100,(oo/mo)*100);
   html += `<div class="risk-item"><div class="risk-label"><span>Open Orders</span><span>${oo} / ${mo}</span></div><div class="risk-bar-bg"><div class="risk-bar-fill" style="width:${ooPct}%;background:${ooPct>80?'var(--red)':'var(--blue)'}"></div></div></div>`;
-  // Drawdown
   const pk = risk.portfolio_peak||0, vl = risk.portfolio_value||0, mdd = risk.max_portfolio_drawdown||0.15;
   const dd = pk>0?(pk-vl)/pk:0, ddPct = Math.min(100,(dd/mdd)*100);
   html += `<div class="risk-item"><div class="risk-label"><span>Drawdown</span><span>${(dd*100).toFixed(1)}% / ${(mdd*100).toFixed(0)}%</span></div><div class="risk-bar-bg"><div class="risk-bar-fill" style="width:${ddPct}%;background:${ddPct>80?'var(--red)':ddPct>50?'var(--yellow)':'var(--green)'}"></div></div></div>`;
-  // Trade count
   html += `<div class="risk-item"><div class="risk-label"><span>Daily Trades</span><span>${risk.daily_trade_count||0}</span></div></div>`;
   bars.innerHTML = html;
 }
@@ -546,6 +657,136 @@ function renderPnl(data) {
     pnlChart.data.datasets[0].data = pnlHistory.map(p=>p.v);
     pnlChart.update('none');
   }
+}
+
+// ── Bracket Orders ─────────────────────────────────────────────────
+function onBracketEvent(type, d) {
+  const short = type.replace('bracket.','');
+  addLog('info', `Bracket ${(d.bracket_id||'').substring(0,8)}: ${short}`);
+  setTimeout(refreshBrackets, 500);
+}
+async function refreshBrackets() {
+  try { const r = await fetch('/api/brackets'); const d = await r.json(); renderBrackets(d.brackets || []); } catch(e) {}
+}
+function renderBrackets(brackets) {
+  const body = document.getElementById('bracketsBody');
+  document.getElementById('bracketCount').textContent = brackets.length;
+  if (brackets.length === 0) { body.innerHTML = '<div class="placeholder">No bracket orders</div>'; return; }
+  let html = '';
+  brackets.forEach(b => {
+    const stateClass = (b.state||'').toLowerCase().replace(/ /g,'_');
+    const isTrailing = b.trailing_stop ? '<span style="color:var(--cyan);font-size:10px"> TRAIL</span>' : '';
+    const isScaled = b.take_profit_levels && b.take_profit_levels.length > 0 ? '<span style="color:var(--orange);font-size:10px"> SCALED</span>' : '';
+    html += `<div class="bracket-row">
+      <div class="bracket-header"><span class="bracket-sym">${b.symbol}${isTrailing}${isScaled}</span><span class="bracket-state-badge ${stateClass}">${b.state}</span></div>
+      <div class="bracket-detail"><span>SL: $${fmtPrice(b.stop_loss_price)}</span><span>TP: $${fmtPrice(b.take_profit_price)}</span><span>Qty: ${b.quantity}</span>${b.entry_fill_price?'<span>Entry: $'+fmtPrice(b.entry_fill_price)+'</span>':''}</div>
+    </div>`;
+  });
+  body.innerHTML = html;
+}
+
+// ── Trailing Stops ─────────────────────────────────────────────────
+function onTrailingStopEvent(type, d) {
+  const short = type.replace('trailing_stop.','');
+  addLog('info', `Trailing stop ${(d.trailing_stop_id||'').substring(0,8)}: ${short}`);
+  setTimeout(refreshTrailingStops, 500);
+}
+async function refreshTrailingStops() {
+  try { const r = await fetch('/api/trailing-stops'); const d = await r.json(); renderTrailingStops(d.trailing_stops || []); } catch(e) {}
+}
+function renderTrailingStops(stops) {
+  const body = document.getElementById('tabTrailing');
+  if (stops.length === 0) { body.innerHTML = '<div class="placeholder">No trailing stops</div>'; return; }
+  let html = '';
+  stops.forEach(ts => {
+    const trailInfo = ts.trail_amount ? `$${ts.trail_amount} trail` : `${ts.trail_percent}% trail`;
+    const highest = parseFloat(ts.highest_price) || 0;
+    const stop = parseFloat(ts.current_stop_price) || 0;
+    const pct = highest > 0 ? ((highest - stop) / highest * 100).toFixed(1) : 0;
+    html += `<div class="ts-row">
+      <div class="ts-header"><span class="ts-sym">${ts.symbol}</span><span style="color:var(--text-secondary);font-size:11px">${trailInfo}</span></div>
+      <div class="ts-detail">Stop: <span style="color:var(--red)">$${fmtPrice(stop)}</span> | High: $${fmtPrice(highest)} | Gap: ${pct}%</div>
+      <div class="ts-bar-bg"><div class="ts-bar-fill" style="width:${Math.max(5, 100-pct)}%"></div></div>
+    </div>`;
+  });
+  body.innerHTML = html;
+}
+
+// ── Scaled Orders ──────────────────────────────────────────────────
+function onScaledOrderEvent(type, d) {
+  const short = type.replace('scaled.','');
+  addLog('info', `Scaled order ${(d.scaled_id||'').substring(0,8)}: ${short}`);
+  setTimeout(refreshScaledOrders, 500);
+}
+async function refreshScaledOrders() {
+  try { const r = await fetch('/api/scaled-orders'); const d = await r.json(); renderScaledOrders(d.scaled_exits || [], d.scaled_entries || []); } catch(e) {}
+}
+function renderScaledOrders(exits, entries) {
+  const body = document.getElementById('tabScaled');
+  if (exits.length === 0 && entries.length === 0) { body.innerHTML = '<div class="placeholder">No scaled orders</div>'; return; }
+  let html = '';
+  exits.forEach(se => {
+    const filled = se.tranches.filter(t=>t.filled).length;
+    html += `<div class="scaled-row">
+      <div class="scaled-header"><span class="scaled-sym">${se.symbol} <span style="color:var(--green);font-size:10px">EXIT</span></span><span style="font-size:11px;color:var(--text-secondary)">${filled}/${se.tranches.length} tranches</span></div>
+      <div class="tranche-bar">${se.tranches.map(t=>`<div class="tranche-seg ${t.filled?'filled':'pending'}" title="$${t.price} x${t.quantity}"></div>`).join('')}</div>
+    </div>`;
+  });
+  entries.forEach(en => {
+    const filled = en.tranches.filter(t=>t.filled).length;
+    html += `<div class="scaled-row">
+      <div class="scaled-header"><span class="scaled-sym">${en.symbol} <span style="color:var(--blue);font-size:10px">ENTRY</span></span><span style="font-size:11px;color:var(--text-secondary)">${filled}/${en.tranches.length} tranches</span></div>
+      <div class="tranche-bar">${en.tranches.map(t=>`<div class="tranche-seg ${t.filled?'filled':'pending'}" title="$${t.price} x${t.quantity}"></div>`).join('')}</div>
+    </div>`;
+  });
+  body.innerHTML = html;
+}
+
+// ── Greeks & Options ───────────────────────────────────────────────
+async function refreshGreeks() {
+  try {
+    const r = await fetch('/api/greeks'); const d = await r.json();
+    const g = d.portfolio_greeks || {};
+    document.getElementById('gDelta').textContent = g.total_delta != null ? g.total_delta.toFixed(2) : '--';
+    document.getElementById('gGamma').textContent = g.total_gamma != null ? g.total_gamma.toFixed(4) : '--';
+    document.getElementById('gTheta').textContent = g.total_theta != null ? g.total_theta.toFixed(2) : '--';
+    document.getElementById('gVega').textContent = g.total_vega != null ? g.total_vega.toFixed(2) : '--';
+    renderGreeksPositions(d.positions || []);
+  } catch(e) {}
+}
+function renderGreeksPositions(positions) {
+  const body = document.getElementById('greeksPositions');
+  if (positions.length === 0) { body.innerHTML = '<div class="placeholder">No options positions</div>'; return; }
+  let html = '';
+  positions.forEach(p => {
+    html += `<div class="option-pos-row"><span class="sym">${p.symbol}</span><span class="greeks"><span>D:${fmtGreek(p.delta)}</span><span>G:${fmtGreek(p.gamma)}</span><span>T:${fmtGreek(p.theta)}</span><span>V:${fmtGreek(p.vega)}</span></span></div>`;
+  });
+  body.innerHTML = html;
+}
+
+// ── Expirations ────────────────────────────────────────────────────
+function onExpirationEvent(type, d) {
+  const short = type.replace('options.','');
+  addLog('warn', `Expiration: ${short} - ${d.symbol || JSON.stringify(d)}`);
+  setTimeout(refreshExpirations, 500);
+}
+async function refreshExpirations() {
+  try { const r = await fetch('/api/expirations'); const d = await r.json(); renderExpirations(d.positions || []); } catch(e) {}
+}
+function renderExpirations(positions) {
+  const body = document.getElementById('expiryPositions');
+  if (positions.length === 0) { body.innerHTML = '<div class="placeholder">No expiring positions</div>'; return; }
+  let html = '';
+  positions.sort((a,b) => a.dte - b.dte);
+  positions.forEach(p => {
+    const dteCls = p.dte <= 1 ? 'danger' : p.dte <= 7 ? 'warn' : 'ok';
+    html += `<div class="option-pos-row">
+      <span class="sym">${p.symbol}</span>
+      <span style="color:var(--text-secondary);font-size:11px">${p.contract_type} $${p.strike_price} ${p.expiration_date}</span>
+      <span class="dte-badge ${dteCls}">${p.dte} DTE</span>
+    </div>`;
+  });
+  body.innerHTML = html;
 }
 
 // ── Renderers ──────────────────────────────────────────────────────
@@ -608,6 +849,7 @@ document.querySelectorAll('.log-filter-btn').forEach(btn => {
 function fmtPrice(v) { return v != null ? Number(v).toFixed(2) : '--'; }
 function fmtNum(n) { return n != null ? Number(n).toLocaleString() : '0'; }
 function fmtUptime(s) { if (!s) return '0s'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return h>0?`${h}h ${m}m`:m>0?`${m}m ${sec}s`:`${sec}s`; }
+function fmtGreek(v) { return v != null ? Number(v).toFixed(3) : '--'; }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 // ── Periodic refreshes ─────────────────────────────────────────────
@@ -626,6 +868,11 @@ setInterval(refreshPnl, 10000);
 setInterval(refreshRisk, 10000);
 setInterval(refreshStrategies, 15000);
 setInterval(refreshPortfolio, 15000);
+setInterval(refreshBrackets, 10000);
+setInterval(refreshTrailingStops, 5000);
+setInterval(refreshScaledOrders, 5000);
+setInterval(refreshGreeks, 15000);
+setInterval(refreshExpirations, 30000);
 
 // ── Boot ───────────────────────────────────────────────────────────
 try { initPnlChart(); } catch(e) { console.warn('Chart.js not loaded:', e); }

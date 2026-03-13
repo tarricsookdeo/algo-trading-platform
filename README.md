@@ -10,6 +10,13 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 - **Strategy framework** — Abstract base class with lifecycle management, event-driven signal generation, and order submission
 - **Risk management** — 6 pre-trade checks, 2 post-trade checks, automatic trading halts, and configurable limits
 - **Monitoring dashboard** — FastAPI-powered UI with real-time WebSocket updates, REST API, and system metrics
+- **Crypto trading** — Buy and sell crypto via Public.com with fractional quantities and 24/7 support
+- **Options trading** — Single-leg and multi-leg options orders with strategy builder for verticals, iron condors, straddles, strangles, butterflies, and calendar spreads
+- **Greeks-aware risk** — Portfolio-level delta, gamma, theta, and vega risk checks with configurable limits
+- **Expiration management** — Automatic DTE monitoring, position auto-close, alerts, and rolling
+- **Trailing stops** — Dynamic stop-loss orders that ratchet up as price rises, with cancel-and-replace updates
+- **Scaled orders** — Multi-tranche entries and exits with automatic stop-loss adjustment
+- **Order routing** — Asset-class-aware routing across equity, options, and crypto adapters
 - **Event-driven architecture** — Async pub/sub event bus connecting all components with wildcard subscriptions
 
 ## Architecture
@@ -18,6 +25,7 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 ┌──────────────────────────────────────────────────────────────────┐
 │                      Dashboard (FastAPI)                          │
 │            REST API ← EventBus → WebSocket (live updates)        │
+│  Bracket viz │ Trailing stops │ Scaled orders │ Greeks/DTE       │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Strategy Manager                              │
 │        Register → Wire Events → Start/Stop Strategies            │
@@ -26,31 +34,42 @@ A production-oriented live algorithmic trading platform built in Python. Event-d
 │  │  on_quote / on_trade / on_bar → signals → submit_order     │  │
 │  └────────────────────────────────────────────────────────────┘  │
 ├──────────────────────────────────────────────────────────────────┤
-│                      Risk Manager                                 │
+│              Risk Manager + Greeks-Aware Risk                     │
 │  Pre-trade: position size, concentration, order value,           │
 │             daily loss, open orders, symbol allow/block           │
+│  Greeks: portfolio delta, gamma, theta, vega limits              │
 │  Post-trade: portfolio drawdown, daily trade count               │
 │  Halt: automatic trading halt on limit breach                    │
+├──────────────────────────────────────────────────────────────────┤
+│         Trailing Stops │ Scaled Orders │ Expiration Mgmt         │
+│  TrailingStopManager: dynamic ratcheting stop-loss orders        │
+│  ScaledOrderManager: multi-tranche entries/exits                 │
+│  ExpirationManager: DTE monitoring, auto-close, rolling          │
 ├──────────────────────────────────────────────────────────────────┤
 │                        Event Bus                                  │
 │  Channels: quote │ trade │ bar │ status │ order │ fill │ risk   │
 │            strategy.signal │ execution.* │ system │ ...          │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Data & Execution Layer                        │
-│  ┌─────────────────────────┐   ┌─────────────────────────┐     │
-│  │  DataManager (BYOD)      │   │  Public.com Execution    │     │
-│  │  ┌───────────────────┐  │   │  ┌───────────────────┐  │     │
-│  │  │ DataProvider ABC  │  │   │  │ Equity Orders     │  │     │
-│  │  │ CsvBarProvider    │  │   │  │ Option Orders     │  │     │
-│  │  │ Custom Providers  │  │   │  │ Portfolio Sync    │  │     │
-│  │  ├───────────────────┤  │   │  │ Preflight Checks  │  │     │
-│  │  │ REST Ingestion    │  │   │  └───────────────────┘  │     │
-│  │  │ WS Ingestion      │  │   └─────────────────────────┘     │
-│  │  └───────────────────┘  │                                    │
-│  └─────────────────────────┘                                    │
+│  ┌──────────────────┐   ┌────────────────────────────────────┐  │
+│  │ DataManager (BYOD)│   │          Order Router               │  │
+│  │ ┌──────────────┐ │   │  AssetClass → Adapter dispatch      │  │
+│  │ │DataProvider   │ │   │  ┌──────────┬──────────┬────────┐  │  │
+│  │ │CsvBarProvider │ │   │  │ Equity   │ Options  │ Crypto │  │  │
+│  │ │Custom Provs.  │ │   │  │ Adapter  │ Adapter  │Adapter │  │  │
+│  │ ├──────────────┤ │   │  │(Public)  │(Public)  │(Public)│  │  │
+│  │ │REST Ingestion│ │   │  └──────────┴──────────┴────────┘  │  │
+│  │ │WS Ingestion  │ │   │  Portfolio Sync │ Preflight Checks  │  │
+│  │ └──────────────┘ │   └────────────────────────────────────┘  │
+│  └──────────────────┘                                            │
+├──────────────────────────────────────────────────────────────────┤
+│                Options Strategy Builder                           │
+│  Verticals │ Iron Condors │ Straddles │ Strangles               │
+│  Butterflies │ Calendar Spreads │ Validation                     │
 ├──────────────────────────────────────────────────────────────────┤
 │                       Core Domain                                 │
 │    Models: QuoteTick, TradeTick, Bar, Order, Position            │
+│    OptionsOrder, MultiLegOrder, CryptoOrder, BracketOrder        │
 │    Config │ Logging (structlog) │ Clock │ Enums                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -154,6 +173,12 @@ Open `http://localhost:8080` in your browser. The dashboard shows:
 - Risk state and violations
 - Order management (submit, cancel)
 - System metrics (msg/sec, memory, uptime)
+- Bracket orders with state machine visualization
+- Trailing stop visualization (current stop level, trail amount)
+- Scaled order progress (tranche fill status)
+- Options positions with greeks columns (delta, gamma, theta, vega)
+- Expiration countdown (DTE) for options
+- Crypto positions with fractional quantities
 
 ## Project Structure
 
@@ -175,11 +200,31 @@ src/trading_platform/
 │   └── ingestion_server.py  # REST + WebSocket ingestion endpoints
 ├── adapters/
 │   ├── base.py              # ExecAdapter ABC
-│   └── public_com/
-│       ├── adapter.py       # Public.com execution adapter
-│       ├── client.py        # Public.com API client
-│       ├── parse.py         # Response parsers
-│       └── config.py        # Public.com configuration
+│   ├── public_com/
+│   │   ├── adapter.py       # Public.com execution adapter
+│   │   ├── client.py        # Public.com API client
+│   │   ├── parse.py         # Response parsers
+│   │   └── config.py        # Public.com configuration
+│   ├── crypto/
+│   │   ├── adapter.py       # Crypto execution adapter
+│   │   ├── client.py        # Crypto API client
+│   │   └── config.py        # Crypto configuration
+│   └── options/
+│       ├── adapter.py       # Options execution adapter
+│       └── config.py        # Options configuration
+├── options/
+│   ├── strategy_builder.py  # Multi-leg options strategy builder
+│   ├── strategies.py        # Strategy definitions (verticals, condors, etc.)
+│   ├── validator.py         # Options order validation
+│   ├── greeks.py            # Greeks provider (delta, gamma, theta, vega)
+│   └── expiration.py        # Expiration/DTE monitoring and auto-close
+├── orders/
+│   ├── trailing_stop.py     # TrailingStopManager (dynamic ratcheting stops)
+│   └── scaled.py            # ScaledOrderManager (multi-tranche entries/exits)
+├── bracket/
+│   ├── manager.py           # BracketOrderManager (lifecycle orchestration)
+│   ├── models.py            # Bracket order models
+│   └── enums.py             # Bracket state machine enums
 ├── strategy/
 │   ├── base.py              # Strategy abstract base class
 │   ├── context.py           # StrategyContext (market data + order API)
@@ -242,6 +287,28 @@ max_portfolio_drawdown = 0.15      # Halt on 15% drawdown
 host = "0.0.0.0"
 port = 8080
 
+[crypto]
+trading_pairs = ["BTC-USD", "ETH-USD"]
+poll_interval = 2.0
+portfolio_refresh = 30.0
+
+[options]
+poll_interval = 2.0
+portfolio_refresh = 30.0
+
+[options.expiration]
+auto_close_dte = 1
+alert_dte = 7
+roll_enabled = false
+roll_target_dte = 30
+
+[risk.greeks]
+max_portfolio_delta = 500.0
+max_portfolio_gamma = 100.0
+max_daily_theta = -200.0
+max_portfolio_vega = 1000.0
+greeks_refresh_interval_seconds = 30
+
 [platform]
 log_level = "INFO"
 symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
@@ -263,6 +330,14 @@ Full documentation is available in the [`docs/`](docs/) directory:
 - [Dashboard Guide](docs/dashboard.md) — UI features, REST API, WebSocket API
 - [Event Bus Reference](docs/event-bus.md) — channels, payloads, subscription patterns
 - [API Reference](docs/api-reference.md) — all public classes and methods
+- [Bracket Orders](docs/bracket-orders.md) — synthetic bracket order lifecycle and state machine
+- [Crypto Trading](docs/crypto-trading.md) — Crypto adapter, fractional quantities, 24/7 trading
+- [Options Trading](docs/options-trading.md) — Options order model, adapter, single-leg and multi-leg
+- [Options Strategies](docs/options-strategies.md) — Strategy builder, validation, supported strategies
+- [Trailing Stops](docs/trailing-stops.md) — Dynamic trailing stop orders
+- [Scaled Orders](docs/scaled-orders.md) — Multi-tranche entries and exits
+- [Greeks & Risk](docs/greeks-risk.md) — Greeks provider, portfolio greeks, risk checks
+- [Expiration Management](docs/expiration-management.md) — DTE monitoring, auto-close, rolling
 
 ## Testing
 
@@ -279,3 +354,8 @@ pytest tests/ -v
 - [x] **Phase 5**: Risk controls (pre-trade checks, post-trade checks, trading halts)
 - [x] **Phase 6**: Dashboard enhancements (portfolio, orders, strategies, risk, P&L, data ingestion)
 - [x] **Phase 7**: Documentation and examples
+- [x] **Phase 8**: Crypto adapter (CryptoExecAdapter, fractional quantities, AssetClass routing)
+- [x] **Phase 9**: Options trading (OptionsExecAdapter, MultiLegOrder, strategy builder, validator)
+- [x] **Phase 10**: Trailing stops and scaled orders (TrailingStopManager, ScaledOrderManager)
+- [x] **Phase 11**: Greeks-aware risk and expiration management
+- [x] **Phase 12**: Dashboard updates and comprehensive documentation

@@ -23,6 +23,11 @@ The web UI displays:
 | **Strategies** | Registered strategies with state, P&L, and start/stop controls |
 | **Risk** | Current risk state, limits, and violation history |
 | **P&L** | Daily and cumulative P&L, per-strategy breakdown |
+| **Bracket Orders** | Active brackets with state badge, entry/exit prices, P&L |
+| **Trailing Stops** | Dynamic stop levels with trail visualization bar |
+| **Scaled Orders** | Multi-tranche entries/exits with progress bars |
+| **Options & Greeks** | Portfolio delta/gamma/theta/vega summary, positions with greeks columns |
+| **Expirations** | Options positions with DTE countdown badges |
 
 ## REST API Reference
 
@@ -269,6 +274,133 @@ See [Data Providers & Adapters](adapters.md#rest--websocket-ingestion) for full 
 
 ---
 
+### `GET /api/brackets`
+
+Active and historical bracket orders.
+
+```json
+{
+  "brackets": [
+    {
+      "bracket_id": "brk-001",
+      "symbol": "AAPL",
+      "quantity": 100,
+      "entry_type": "market",
+      "stop_loss_price": "145.00",
+      "take_profit_price": "160.00",
+      "state": "monitoring",
+      "entry_fill_price": "150.00",
+      "created_at": "2026-03-12T14:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+### `POST /api/brackets/{bracket_id}/cancel`
+
+Cancel an active bracket order.
+
+```json
+{"status": "cancel_requested", "bracket_id": "brk-001"}
+```
+
+---
+
+### `GET /api/trailing-stops`
+
+Active trailing stop orders.
+
+```json
+{
+  "trailing_stops": [
+    {
+      "trailing_stop_id": "ts-001",
+      "symbol": "AAPL",
+      "quantity": "100",
+      "trail_amount": "2.00",
+      "trail_percent": null,
+      "current_stop_price": "153.00",
+      "highest_price": "155.00",
+      "state": "active",
+      "stop_order_id": "order-456"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /api/scaled-orders`
+
+Scaled entry and exit orders with tranche details.
+
+```json
+{
+  "scaled_exits": [
+    {
+      "scaled_id": "se-001",
+      "symbol": "AAPL",
+      "total_quantity": "100",
+      "remaining_quantity": "50",
+      "stop_loss_price": "145.00",
+      "state": "active",
+      "tranches": [
+        {"price": "155.00", "quantity": "50", "filled": true, "order_id": "o1"},
+        {"price": "160.00", "quantity": "30", "filled": false, "order_id": null},
+        {"price": "165.00", "quantity": "20", "filled": false, "order_id": null}
+      ]
+    }
+  ],
+  "scaled_entries": []
+}
+```
+
+---
+
+### `GET /api/greeks`
+
+Portfolio greeks and options positions.
+
+```json
+{
+  "portfolio_greeks": {
+    "total_delta": 125.5,
+    "total_gamma": 15.2,
+    "total_theta": -45.8,
+    "total_vega": 230.0,
+    "position_count": 5
+  },
+  "positions": [...]
+}
+```
+
+---
+
+### `GET /api/expirations`
+
+Options positions with DTE (days to expiration).
+
+```json
+{
+  "positions": [
+    {
+      "symbol": "AAPL250321C00150000",
+      "underlying": "AAPL",
+      "quantity": 5,
+      "contract_type": "call",
+      "strike_price": 150.0,
+      "expiration_date": "2025-03-21",
+      "dte": 8,
+      "strategy_type": ""
+    }
+  ]
+}
+```
+
+---
+
 ## WebSocket API
 
 Connect to `ws://localhost:8080/ws` for real-time updates.
@@ -307,6 +439,11 @@ All messages follow this structure:
 | `fill` | `Channel.FILL` | Order fill |
 | `position` | `Channel.POSITION` | Position update |
 | `metrics` | Internal | System metrics (broadcast every 2 seconds) |
+| `trailing_stop.*` | `TrailingStopChannel.*` | Trailing stop state changes |
+| `scaled.*` | `ScaledOrderChannel.*` | Scaled order events |
+| `bracket.*` | `BracketChannel.*` | Bracket order state changes |
+| `options.expiration.*` | `Channel.EXPIRATION_*` | Expiration alerts and auto-close |
+| `options.position.*` | - | Position rolled/closed |
 
 ### Metrics Message
 
@@ -326,6 +463,19 @@ Broadcast every 2 seconds:
   }
 }
 ```
+
+### WebSocket Event Categories
+
+The WebSocket manager adds a `category` field to messages for client-side routing:
+
+- `trailing_stop` — Trailing stop events
+- `scaled_order` — Scaled order events
+- `bracket` — Bracket order events
+- `expiration` — Expiration and position events
+- `market_data` — Quote, trade, bar events
+- `execution` — Order execution events
+- `risk` — Risk check events
+- `strategy` — Strategy signal/lifecycle events
 
 ## Customizing the Dashboard
 
