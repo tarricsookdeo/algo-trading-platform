@@ -277,34 +277,74 @@ class PublicComExecAdapter(ExecAdapter):
 
     async def _track_order(self, order_id: str, async_order: Any) -> None:
         """Track an order's status via polling until terminal."""
+        _fill_published = False
+
+        async def _publish_status(raw_status: Any) -> None:
+            nonlocal _fill_published
+            status_name = str(raw_status.name) if hasattr(raw_status, "name") else str(raw_status)
+            status_upper = status_name.upper()
+            if status_upper == "FILLED":
+                _fill_published = True
+                await self._bus.publish("execution.order.filled", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+            elif status_upper == "PARTIALLY_FILLED":
+                await self._bus.publish("execution.order.partially_filled", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+            elif status_upper in ("CANCELLED", "CANCELED"):
+                await self._bus.publish("execution.order.cancelled", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+            elif status_upper == "REJECTED":
+                await self._bus.publish("execution.order.rejected", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+
         try:
             async def on_update(update: Any) -> None:
-                status_name = str(update.status.name) if hasattr(update.status, "name") else str(update.status)
-                status_upper = status_name.upper()
-
-                if status_upper == "FILLED":
-                    await self._bus.publish("execution.order.filled", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
-                elif status_upper == "PARTIALLY_FILLED":
-                    await self._bus.publish("execution.order.partially_filled", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
-                elif status_upper in ("CANCELLED", "CANCELED"):
-                    await self._bus.publish("execution.order.cancelled", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
-                elif status_upper == "REJECTED":
-                    await self._bus.publish("execution.order.rejected", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
+                # SDK may use .status, .order_status, or .state — try all
+                raw = (
+                    getattr(update, "status", None)
+                    or getattr(update, "order_status", None)
+                    or getattr(update, "state", None)
+                )
+                if raw is None:
+                    self._log.debug(
+                        "order update with unknown status field",
+                        order_id=order_id,
+                        attrs=[a for a in dir(update) if not a.startswith("_")],
+                    )
+                    return
+                await _publish_status(raw)
 
             await async_order.subscribe_updates(on_update)
             await async_order.wait_for_terminal_status(timeout=300)
+
+            # Fallback: if the on_update callback never fired successfully, derive
+            # the final status from the order object directly and publish now.
+            if not _fill_published:
+                raw = (
+                    getattr(async_order, "status", None)
+                    or getattr(async_order, "order_status", None)
+                    or getattr(async_order, "state", None)
+                )
+                if raw is not None:
+                    await _publish_status(raw)
+                else:
+                    # Last resort: assume FILLED since wait_for_terminal_status completed
+                    self._log.warning(
+                        "could not read terminal status from order object — assuming FILLED",
+                        order_id=order_id,
+                    )
+                    await self._bus.publish("execution.order.filled", {
+                        "order_id": order_id,
+                        "status": "FILLED",
+                    })
         except Exception as exc:
             self._log.warning("order tracking ended", order_id=order_id, error=str(exc))
         finally:

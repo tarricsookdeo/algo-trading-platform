@@ -40,6 +40,7 @@ from trading_platform.options.greeks import GreeksProvider
 from trading_platform.risk.greeks_checks import GreeksRiskConfig
 from trading_platform.risk.manager import RiskManager
 from trading_platform.risk.models import RiskConfig
+from trading_platform.strategy.examples.momentum_scalper import MomentumScalperStrategy
 from trading_platform.strategy.manager import StrategyManager
 
 BANNER = r"""
@@ -271,6 +272,7 @@ async def run(args: argparse.Namespace, *, uvloop_active: bool = False) -> None:
         exec_adapter=exec_adapter,
         strategy_manager=strategy_manager,
         risk_manager=risk_manager,
+        bracket_manager=bracket_manager,
         message_queue=message_queue,
         perf_metrics=perf_metrics,
         throttler=throttler,
@@ -306,6 +308,24 @@ async def run(args: argparse.Namespace, *, uvloop_active: bool = False) -> None:
         log.info("bracket order manager events wired")
         await strategy_manager.wire_events()
         log.info("strategy manager events wired")
+
+        # ── Strategies ────────────────────────────────────────────────
+        scalper = MomentumScalperStrategy(
+            name="momentum_scalper",
+            event_bus=event_bus,
+            config={
+                "symbols": ["TQQQ", "SOXL"],
+                "quantity": 10,
+                "take_profit": "0.05",
+                "stop_loss": "1.00",
+                "momentum_window": 3,
+                "max_spread": "0.10",
+                "cooldown_seconds": 60,
+            },
+        )
+        strategy_manager.register(scalper)
+        await strategy_manager.start_strategy("momentum_scalper")
+        log.info("momentum scalper strategy started")
 
         # Start WS manager
         await ws_manager.start()

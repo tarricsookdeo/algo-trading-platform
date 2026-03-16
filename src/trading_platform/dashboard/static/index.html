@@ -574,8 +574,9 @@ function onAccountUpdate(d) {
 function renderPositions(positions) {
   const body = document.getElementById('positionsBody');
   if (!positions || positions.length === 0) { body.innerHTML = '<div class="placeholder">No positions</div>'; return; }
+  const sorted = [...positions].sort((a, b) => (a.symbol || '').localeCompare(b.symbol || ''));
   let html = '';
-  positions.forEach(p => {
+  sorted.forEach(p => {
     const cls = (p.unrealized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
     const qty = Number(p.quantity);
     const qtyStr = Number.isInteger(qty) ? qty.toString() : qty.toFixed(6);
@@ -615,7 +616,7 @@ async function cancelOrder(oid) {
 
 // ── Strategies ─────────────────────────────────────────────────────
 function onStrategyEvent(d) { addLog('info', `Strategy ${d.strategy_id}: ${d.action}`); refreshStrategies(); }
-function onStrategySignal(d) { addLog('info', `Signal from ${d.strategy_id}: ${JSON.stringify(d.signal)}`); }
+function onStrategySignal(d) { addLog('info', `Signal from ${d.strategy_id}: ${d.action} ${d.symbol}`); setTimeout(refreshStrategies, 500); }
 async function refreshStrategies() {
   try { const r = await fetch('/api/strategies'); const d = await r.json(); renderStrategies(d.strategies || []); } catch(e) {}
 }
@@ -699,6 +700,8 @@ function onBracketEvent(type, d) {
   const short = type.replace('bracket.','');
   addLog('info', `Bracket ${(d.bracket_id||'').substring(0,8)}: ${short}`);
   setTimeout(refreshBrackets, 500);
+  const terminal = ['bracket.take_profit.filled', 'bracket.stopped_out', 'bracket.canceled', 'bracket.error'];
+  if (terminal.includes(type)) setTimeout(refreshStrategies, 600);
 }
 async function refreshBrackets() {
   try { const r = await fetch('/api/brackets'); const d = await r.json(); renderBrackets(d.brackets || []); } catch(e) {}

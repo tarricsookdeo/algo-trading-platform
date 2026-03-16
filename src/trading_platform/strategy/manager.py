@@ -6,6 +6,9 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+from decimal import Decimal
+
+from trading_platform.bracket.enums import BracketChannel
 from trading_platform.core.enums import Channel
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
@@ -54,6 +57,8 @@ class StrategyManager:
         self._options_builder = options_strategy_builder
         self._log = get_logger("strategy.manager")
         self._strategies: dict[str, StrategyEntry] = {}
+        # bracket_id → {strategy_id, entry_ask, quantity}
+        self._bracket_to_strategy: dict[str, dict] = {}
 
     def register(self, strategy: Strategy) -> None:
         """Register a strategy for management."""
@@ -218,6 +223,50 @@ class StrategyManager:
                 except Exception:
                     pass
 
+    async def _on_strategy_signal(self, channel: str, event: Any) -> None:
+        """Track entries so bracket completions can update stats."""
+        if not isinstance(event, dict):
+            return
+        sid = event.get("strategy_id")
+        bracket_id = event.get("bracket_id")
+        action = event.get("action", "")
+        entry = self._strategies.get(sid) if sid else None
+        if not entry:
+            return
+        if action == "long_entry" and bracket_id:
+            entry.trades_executed += 1
+            self._bracket_to_strategy[bracket_id] = {
+                "strategy_id": sid,
+                "entry_ask": Decimal(str(event.get("ask", "0"))),
+                "quantity": Decimal(str(event.get("quantity", "0"))),
+            }
+
+    async def _on_bracket_completed(self, channel: str, event: Any) -> None:
+        """Update win/loss/pnl when a bracket reaches a terminal state."""
+        if not isinstance(event, dict):
+            return
+        bracket_id = event.get("bracket_id")
+        if not bracket_id:
+            return
+        info = self._bracket_to_strategy.pop(bracket_id, None)
+        if not info:
+            return
+        entry = self._strategies.get(info["strategy_id"])
+        if not entry:
+            return
+        exit_price = Decimal(str(event.get("exit_price", "0")))
+        entry_ask = info["entry_ask"]
+        quantity = info["quantity"]
+        if exit_price and entry_ask and quantity:
+            trade_pnl = float((exit_price - entry_ask) * quantity)
+        else:
+            trade_pnl = 0.0
+        entry.pnl += trade_pnl
+        if channel == BracketChannel.BRACKET_TAKE_PROFIT_FILLED:
+            entry.wins += 1
+        else:
+            entry.losses += 1
+
     async def wire_events(self) -> None:
         """Subscribe to EventBus channels to dispatch to strategies."""
         await self._bus.subscribe(Channel.QUOTE, self.dispatch_quote)
@@ -225,6 +274,9 @@ class StrategyManager:
         await self._bus.subscribe(Channel.BAR, self.dispatch_bar)
         await self._bus.subscribe(Channel.ORDER, self.dispatch_order_update)
         await self._bus.subscribe("execution.portfolio.update", self.dispatch_position_update)
+        await self._bus.subscribe("strategy.signal", self._on_strategy_signal)
+        await self._bus.subscribe(BracketChannel.BRACKET_TAKE_PROFIT_FILLED, self._on_bracket_completed)
+        await self._bus.subscribe(BracketChannel.BRACKET_STOPPED_OUT, self._on_bracket_completed)
 
     async def unwire_events(self) -> None:
         await self._bus.unsubscribe(Channel.QUOTE, self.dispatch_quote)
@@ -232,6 +284,9 @@ class StrategyManager:
         await self._bus.unsubscribe(Channel.BAR, self.dispatch_bar)
         await self._bus.unsubscribe(Channel.ORDER, self.dispatch_order_update)
         await self._bus.unsubscribe("execution.portfolio.update", self.dispatch_position_update)
+        await self._bus.unsubscribe("strategy.signal", self._on_strategy_signal)
+        await self._bus.unsubscribe(BracketChannel.BRACKET_TAKE_PROFIT_FILLED, self._on_bracket_completed)
+        await self._bus.unsubscribe(BracketChannel.BRACKET_STOPPED_OUT, self._on_bracket_completed)
 
     def get_strategy_info(self) -> list[dict[str, Any]]:
         """Return info about all registered strategies."""
