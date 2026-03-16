@@ -318,3 +318,138 @@ async def test_halt_publishes_event(bus, risk_manager):
     await bus.subscribe("risk.halt", handler)
     await risk_manager.update_daily_pnl(-6000)
     assert any(ch == "risk.halt" for ch, _ in received)
+
+
+# ── Additional RiskManager tests ─────────────────────────────────────
+
+
+def test_update_open_order_count(risk_manager):
+    risk_manager.update_open_order_count(7)
+    assert risk_manager.state.open_order_count == 7
+
+
+def test_update_open_order_count_reflected_in_risk_state(risk_manager):
+    risk_manager.update_open_order_count(15)
+    state = risk_manager.get_risk_state()
+    # The state dict doesn't expose open_order_count directly but we verify
+    # it is recorded on the internal state
+    assert risk_manager.state.open_order_count == 15
+
+
+@pytest.mark.asyncio
+async def test_greeks_violation_appended_to_state(bus):
+    """When a greeks check fails, a violation is recorded on the state."""
+    from decimal import Decimal
+    from unittest.mock import AsyncMock
+    from trading_platform.core.enums import AssetClass, ContractType
+    from trading_platform.options.greeks import AggregatedGreeks, GreeksProvider
+    from trading_platform.risk.greeks_checks import GreeksRiskConfig
+
+    config = RiskConfig()
+    rm = RiskManager(config, bus)
+
+    greeks_config = GreeksRiskConfig(max_portfolio_delta=10.0)
+    provider = AsyncMock(spec=GreeksProvider)
+    provider.get_portfolio_greeks = AsyncMock(
+        return_value=AggregatedGreeks(total_delta=999.0)  # way over limit
+    )
+    rm.register_greeks_checks(provider, greeks_config)
+
+    order = Order(
+        symbol="AAPL240119C00150000",
+        asset_class=AssetClass.OPTION,
+        contract_type=ContractType.CALL,
+        strike_price=Decimal("150"),
+        expiration_date="2024-01-19",
+        underlying_symbol="AAPL",
+        quantity=Decimal("1"),
+        order_id="greeks-v1",
+    )
+    passed, reason = await rm.pre_trade_check(order, [])
+    assert passed is False
+    assert "delta" in reason.lower()
+    # Violation should be recorded
+    assert len(rm.state.violations) == 1
+    assert rm.state.violations[0].check_name == "greeks"
+
+
+@pytest.mark.asyncio
+async def test_greeks_failure_publishes_event_from_manager(bus):
+    """Greeks failure should publish risk.check.failed to the event bus."""
+    from decimal import Decimal
+    from unittest.mock import AsyncMock
+    from trading_platform.core.enums import AssetClass, ContractType
+    from trading_platform.options.greeks import AggregatedGreeks, GreeksProvider
+    from trading_platform.risk.greeks_checks import GreeksRiskConfig
+
+    config = RiskConfig()
+    rm = RiskManager(config, bus)
+
+    greeks_config = GreeksRiskConfig(max_portfolio_delta=5.0)
+    provider = AsyncMock(spec=GreeksProvider)
+    provider.get_portfolio_greeks = AsyncMock(
+        return_value=AggregatedGreeks(total_delta=500.0)
+    )
+    rm.register_greeks_checks(provider, greeks_config)
+
+    events = []
+
+    async def capture(ch, ev):
+        events.append(ev)
+
+    await bus.subscribe("risk.check.failed", capture)
+
+    order = Order(
+        symbol="AAPL240119C00150000",
+        asset_class=AssetClass.OPTION,
+        contract_type=ContractType.CALL,
+        strike_price=Decimal("150"),
+        expiration_date="2024-01-19",
+        underlying_symbol="AAPL",
+        quantity=Decimal("1"),
+        order_id="greeks-event-1",
+    )
+    await rm.pre_trade_check(order, [])
+
+    assert len(events) >= 1
+    assert events[-1]["order_id"] == "greeks-event-1"
+
+
+@pytest.mark.asyncio
+async def test_greeks_second_check_fails_short_circuits(bus):
+    """If the first greeks check passes but the second fails, the second failure is returned."""
+    from decimal import Decimal
+    from unittest.mock import AsyncMock
+    from trading_platform.core.enums import AssetClass, ContractType
+    from trading_platform.options.greeks import AggregatedGreeks, GreeksProvider
+    from trading_platform.risk.greeks_checks import GreeksRiskConfig
+
+    config = RiskConfig()
+    rm = RiskManager(config, bus)
+
+    greeks_config = GreeksRiskConfig(
+        max_portfolio_delta=1000.0,  # delta passes
+        max_portfolio_gamma=5.0,     # gamma fails
+    )
+    provider = AsyncMock(spec=GreeksProvider)
+    provider.get_portfolio_greeks = AsyncMock(
+        return_value=AggregatedGreeks(
+            total_delta=50.0,   # within limit
+            total_gamma=999.0,  # exceeds limit
+        )
+    )
+    rm.register_greeks_checks(provider, greeks_config)
+
+    order = Order(
+        symbol="AAPL240119C00150000",
+        asset_class=AssetClass.OPTION,
+        contract_type=ContractType.CALL,
+        strike_price=Decimal("150"),
+        expiration_date="2024-01-19",
+        underlying_symbol="AAPL",
+        quantity=Decimal("1"),
+        order_id="greeks-short-1",
+    )
+    passed, reason = await rm.pre_trade_check(order, [])
+    assert passed is False
+    assert "gamma" in reason.lower()

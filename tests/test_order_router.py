@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from trading_platform.core.enums import AssetClass, OrderSide, OrderType
-from trading_platform.core.models import Order, Position
+from trading_platform.core.enums import AssetClass, ContractType, OrderSide, OrderType
+from trading_platform.core.models import MultiLegOrder, Order, Position
 from trading_platform.core.order_router import OrderRouter
 
 
@@ -153,3 +153,116 @@ class TestConnectDisconnect:
         await router.disconnect()
         equity_adapter.disconnect.assert_awaited_once()
         crypto_adapter.disconnect.assert_awaited_once()
+
+
+# ── Options-specific routing ─────────────────────────────────────────
+
+
+@pytest.fixture
+def options_adapter():
+    adapter = AsyncMock()
+    adapter.submit_order = AsyncMock(return_value={"id": "opt-1"})
+    adapter.submit_multileg_order = AsyncMock(return_value={"id": "ml-1"})
+    adapter.cancel_order = AsyncMock(return_value=None)
+    adapter.cancel_option_order = AsyncMock(return_value=None)
+    adapter.get_positions = AsyncMock(return_value=[])
+    adapter.get_option_positions = AsyncMock(
+        return_value=[Position(symbol="AAPL240119C00150000", quantity=Decimal("5"))]
+    )
+    adapter.get_account = AsyncMock(return_value={"option_buying_power": 20_000})
+    adapter.preflight_option_order = AsyncMock(return_value={"buying_power_effect": -500.0})
+    adapter.get_option_chain = AsyncMock(return_value={"calls": [], "puts": []})
+    adapter.get_option_expirations = AsyncMock(return_value=["2024-01-19", "2024-02-16"])
+    return adapter
+
+
+@pytest.fixture
+def options_router(equity_adapter, options_adapter):
+    r = OrderRouter()
+    r.register(AssetClass.EQUITY, equity_adapter)
+    r.register(AssetClass.OPTION, options_adapter)
+    return r
+
+
+def _option_order(**kwargs) -> Order:
+    defaults = dict(
+        symbol="AAPL240119C00150000",
+        option_symbol="AAPL240119C00150000",
+        asset_class=AssetClass.OPTION,
+        contract_type=ContractType.CALL,
+        strike_price=Decimal("150"),
+        expiration_date="2024-01-19",
+        underlying_symbol="AAPL",
+        quantity=Decimal("1"),
+    )
+    defaults.update(kwargs)
+    return Order(**defaults)
+
+
+def _two_leg_order() -> MultiLegOrder:
+    buy = _option_order(side=OrderSide.BUY)
+    sell = _option_order(side=OrderSide.SELL, strike_price=Decimal("155"))
+    return MultiLegOrder(legs=[buy, sell], strategy_type="vertical_spread")
+
+
+class TestOptionsRouting:
+    def test_get_options_adapter_raises_when_not_registered(self):
+        r = OrderRouter()
+        with pytest.raises(ValueError, match="No adapter registered for asset class 'option'"):
+            r._get_options_adapter()
+
+    def test_get_options_adapter_returns_registered_adapter(self, options_router, options_adapter):
+        assert options_router._get_options_adapter() is options_adapter
+
+    @pytest.mark.asyncio
+    async def test_submit_multileg_order_routes_to_options_adapter(
+        self, options_router, options_adapter
+    ):
+        result = await options_router.submit_multileg_order(_two_leg_order())
+        options_adapter.submit_multileg_order.assert_awaited_once()
+        assert result == {"id": "ml-1"}
+
+    @pytest.mark.asyncio
+    async def test_submit_multileg_raises_if_no_options_adapter(self):
+        r = OrderRouter()
+        with pytest.raises(ValueError, match="No adapter registered"):
+            await r.submit_multileg_order(_two_leg_order())
+
+    @pytest.mark.asyncio
+    async def test_cancel_option_order_routes_to_options_adapter(
+        self, options_router, options_adapter
+    ):
+        await options_router.cancel_option_order("opt-abc")
+        options_adapter.cancel_option_order.assert_awaited_once_with("opt-abc")
+
+    @pytest.mark.asyncio
+    async def test_cancel_option_order_raises_if_no_options_adapter(self):
+        r = OrderRouter()
+        with pytest.raises(ValueError, match="No adapter registered"):
+            await r.cancel_option_order("opt-abc")
+
+    @pytest.mark.asyncio
+    async def test_get_option_positions(self, options_router, options_adapter):
+        positions = await options_router.get_option_positions()
+        options_adapter.get_option_positions.assert_awaited_once()
+        assert len(positions) == 1
+        assert positions[0].symbol == "AAPL240119C00150000"
+
+    @pytest.mark.asyncio
+    async def test_preflight_option_order(self, options_router, options_adapter):
+        order = _option_order(order_type=OrderType.LIMIT, limit_price=5.00)
+        result = await options_router.preflight_option_order(order)
+        options_adapter.preflight_option_order.assert_awaited_once_with(order)
+        assert result == {"buying_power_effect": -500.0}
+
+    @pytest.mark.asyncio
+    async def test_get_option_chain(self, options_router, options_adapter):
+        result = await options_router.get_option_chain("AAPL")
+        options_adapter.get_option_chain.assert_awaited_once_with("AAPL")
+        assert result == {"calls": [], "puts": []}
+
+    @pytest.mark.asyncio
+    async def test_get_option_expirations(self, options_router, options_adapter):
+        result = await options_router.get_option_expirations("AAPL")
+        options_adapter.get_option_expirations.assert_awaited_once_with("AAPL")
+        assert result == ["2024-01-19", "2024-02-16"]

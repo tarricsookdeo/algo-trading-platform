@@ -377,3 +377,196 @@ class TestSMACrossover:
     async def test_on_signal_no_context(self, sma_strategy):
         """on_signal should not raise without context."""
         await sma_strategy.on_signal({"symbol": "AAPL", "side": "buy"})
+
+
+# ── StrategyContext: bracket order paths ──────────────────────────────
+
+
+class TestStrategyContextBracket:
+    @pytest.mark.asyncio
+    async def test_submit_bracket_no_manager_returns_none(self, bus):
+        ctx = StrategyContext("s1", bus)  # no bracket manager
+        result = await ctx.submit_bracket_order(
+            symbol="AAPL",
+            quantity=Decimal("10"),
+            entry_type=OrderType.MARKET,
+            stop_loss_price=Decimal("140"),
+            take_profit_price=Decimal("160"),
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_submit_bracket_delegates_to_manager(self, bus):
+        mock_bracket = AsyncMock()
+        mock_bracket.submit_bracket_order = AsyncMock(return_value={"bracket_id": "b1"})
+        ctx = StrategyContext("s1", bus, bracket_manager=mock_bracket)
+
+        result = await ctx.submit_bracket_order(
+            symbol="AAPL",
+            quantity=Decimal("10"),
+            entry_type=OrderType.MARKET,
+            stop_loss_price=Decimal("140"),
+            take_profit_price=Decimal("160"),
+        )
+
+        mock_bracket.submit_bracket_order.assert_awaited_once()
+        assert result == {"bracket_id": "b1"}
+
+    @pytest.mark.asyncio
+    async def test_submit_bracket_passes_limit_price(self, bus):
+        mock_bracket = AsyncMock()
+        mock_bracket.submit_bracket_order = AsyncMock(return_value=None)
+        ctx = StrategyContext("s1", bus, bracket_manager=mock_bracket)
+
+        await ctx.submit_bracket_order(
+            symbol="AAPL",
+            quantity=Decimal("10"),
+            entry_type=OrderType.LIMIT,
+            stop_loss_price=Decimal("140"),
+            take_profit_price=Decimal("160"),
+            entry_limit_price=Decimal("150"),
+        )
+
+        call_kwargs = mock_bracket.submit_bracket_order.call_args[1]
+        assert call_kwargs["entry_limit_price"] == Decimal("150")
+
+    @pytest.mark.asyncio
+    async def test_cancel_bracket_no_manager_returns_false(self, bus):
+        ctx = StrategyContext("s1", bus)
+        result = await ctx.cancel_bracket_order("b-nonexistent")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_cancel_bracket_delegates_to_manager(self, bus):
+        mock_bracket = AsyncMock()
+        mock_bracket.cancel_bracket = AsyncMock(return_value=True)
+        ctx = StrategyContext("s1", bus, bracket_manager=mock_bracket)
+
+        result = await ctx.cancel_bracket_order("b-123")
+
+        mock_bracket.cancel_bracket.assert_awaited_once_with("b-123")
+        assert result is True
+
+
+# ── StrategyContext: options strategy paths ───────────────────────────
+
+
+class TestStrategyContextOptions:
+    def test_options_builder_property_is_none_by_default(self, bus):
+        ctx = StrategyContext("s1", bus)
+        assert ctx.options_strategy_builder is None
+
+    def test_options_builder_property_returns_builder(self, bus):
+        mock_builder = object()
+        ctx = StrategyContext("s1", bus, options_strategy_builder=mock_builder)
+        assert ctx.options_strategy_builder is mock_builder
+
+    @pytest.mark.asyncio
+    async def test_submit_options_strategy_no_builder_returns_none(self, bus):
+        ctx = StrategyContext("s1", bus)
+        result = await ctx.submit_options_strategy({"type": "vertical"})
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_submit_options_strategy_no_exec_returns_none(self, bus):
+        mock_builder = AsyncMock()
+        ctx = StrategyContext("s1", bus, options_strategy_builder=mock_builder)
+        result = await ctx.submit_options_strategy({"type": "vertical"})
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_submit_options_strategy_delegates_to_builder(self, bus, mock_exec):
+        mock_builder = AsyncMock()
+        mock_builder.build_and_submit = AsyncMock(return_value={"id": "ml-1"})
+        ctx = StrategyContext(
+            "s1", bus,
+            exec_adapter=mock_exec,
+            options_strategy_builder=mock_builder,
+        )
+
+        result = await ctx.submit_options_strategy({"type": "vertical"})
+
+        mock_builder.build_and_submit.assert_awaited_once_with({"type": "vertical"}, mock_exec)
+        assert result == {"id": "ml-1"}
+
+
+# ── Strategy base: price gate edge cases ─────────────────────────────
+
+
+class TestStrategyPriceGate:
+    @pytest.fixture
+    def strat_with_abs_gate(self, bus):
+        return DummyStrategy("abs_gate", bus, config={"min_price_change": 1.0})
+
+    @pytest.fixture
+    def strat_with_pct_gate(self, bus):
+        return DummyStrategy("pct_gate", bus, config={"min_price_change_percent": 0.01})
+
+    @pytest.fixture
+    def strat_with_both_gates(self, bus):
+        return DummyStrategy(
+            "both_gates", bus,
+            config={"min_price_change": 1.0, "min_price_change_percent": 0.01},
+        )
+
+    def test_pct_gate_skips_small_change(self, strat_with_pct_gate):
+        strat = strat_with_pct_gate
+        # First eval always passes
+        assert strat._should_evaluate("AAPL", Decimal("100"))
+        strat._record_evaluation("AAPL", Decimal("100"))
+        # 0.05% change — below 1% threshold
+        assert not strat._should_evaluate("AAPL", Decimal("100.05"))
+
+    def test_pct_gate_passes_large_change(self, strat_with_pct_gate):
+        strat = strat_with_pct_gate
+        assert strat._should_evaluate("AAPL", Decimal("100"))
+        strat._record_evaluation("AAPL", Decimal("100"))
+        # 2% change — above 1% threshold
+        assert strat._should_evaluate("AAPL", Decimal("102"))
+
+    def test_abs_gate_skips_small_change(self, strat_with_abs_gate):
+        strat = strat_with_abs_gate
+        assert strat._should_evaluate("AAPL", Decimal("100"))
+        strat._record_evaluation("AAPL", Decimal("100"))
+        # 0.5 change — below 1.0 threshold
+        assert not strat._should_evaluate("AAPL", Decimal("100.5"))
+
+    def test_both_gates_either_can_trigger(self, strat_with_both_gates):
+        strat = strat_with_both_gates
+        assert strat._should_evaluate("AAPL", Decimal("100"))
+        strat._record_evaluation("AAPL", Decimal("100"))
+        # 0.5 absolute change (below abs gate) but > 1% pct (above pct gate at 100)
+        # 0.5 / 100 = 0.5% — both below thresholds → should skip
+        assert not strat._should_evaluate("AAPL", Decimal("100.5"))
+
+    def test_both_gates_abs_triggers(self, strat_with_both_gates):
+        strat = strat_with_both_gates
+        assert strat._should_evaluate("AAPL", Decimal("100"))
+        strat._record_evaluation("AAPL", Decimal("100"))
+        # 2.0 absolute change — above abs gate
+        assert strat._should_evaluate("AAPL", Decimal("102"))
+
+    def test_skip_rate_zero_when_no_evaluations(self, bus):
+        strat = DummyStrategy("fresh", bus)
+        assert strat.skip_rate_percent == 0.0
+
+    def test_skip_rate_calculated_correctly(self, bus):
+        strat = DummyStrategy("rate", bus, config={"min_price_change": 1.0})
+        # First tick: runs
+        strat._should_evaluate("AAPL", Decimal("100"))
+        strat._record_evaluation("AAPL", Decimal("100"))
+        # Second tick: skipped (change < 1.0)
+        strat._should_evaluate("AAPL", Decimal("100.1"))
+        strat.evaluations_skipped += 1
+        # skip rate = 1 skipped / (1 run + 1 skipped) = 50%
+        assert strat.skip_rate_percent == 50.0
+
+    @pytest.mark.asyncio
+    async def test_on_order_update_default_does_not_raise(self, bus):
+        strat = DummyStrategy("order_update", bus)
+        await strat.on_order_update({"order_id": "x", "status": "filled"})
+
+    @pytest.mark.asyncio
+    async def test_on_position_update_default_does_not_raise(self, bus):
+        strat = DummyStrategy("pos_update", bus)
+        await strat.on_position_update([])
