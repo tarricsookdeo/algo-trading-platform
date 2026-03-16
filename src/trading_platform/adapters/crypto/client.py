@@ -63,6 +63,6 @@ class CryptoClient:
         """Cancel a crypto order."""
         await self.raw.cancel_crypto_order(order_id)
 
-    async def get_crypto_portfolio(self) -> Any:
-        """Get crypto portfolio positions."""
-        return await self.raw.get_crypto_portfolio()
+    async def get_portfolio(self) -> Any:
+        """Get portfolio — crypto positions are filtered from the full response."""
+        return await self.raw.get_portfolio()

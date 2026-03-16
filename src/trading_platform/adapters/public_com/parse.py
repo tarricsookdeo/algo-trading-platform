@@ -85,12 +85,19 @@ def sdk_order_to_platform(sdk_order: Any) -> Order:
 
 
 def sdk_position_to_platform(sdk_pos: Any) -> Position:
-    """Convert an SDK PortfolioPosition to a platform Position."""
-    symbol = getattr(sdk_pos, "symbol", "")
+    """Convert an SDK PortfolioPosition to a platform Position.
+
+    The v2 portfolio response nests symbol inside an `instrument` object,
+    uses `current_value` for market value, and stores cost basis data in a
+    nested `cost_basis` object.
+    """
+    instrument = getattr(sdk_pos, "instrument", None)
+    symbol = getattr(instrument, "symbol", "") if instrument else getattr(sdk_pos, "symbol", "")
     quantity = Decimal(str(getattr(sdk_pos, "quantity", 0) or 0))
-    avg_entry = float(getattr(sdk_pos, "average_price", 0) or 0)
-    market_value = float(getattr(sdk_pos, "market_value", 0) or 0)
-    unrealized = float(getattr(sdk_pos, "unrealized_pnl", 0) or 0)
+    market_value = float(getattr(sdk_pos, "current_value", 0) or 0)
+    cost_basis = getattr(sdk_pos, "cost_basis", None)
+    avg_entry = float(getattr(cost_basis, "unit_cost", 0) or 0) if cost_basis else 0.0
+    unrealized = float(getattr(cost_basis, "gain_value", 0) or 0) if cost_basis else 0.0
     side = "long" if quantity >= 0 else "short"
 
     return Position(

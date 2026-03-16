@@ -352,7 +352,24 @@ def create_app(
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
-        await ws_manager.connect(ws)
+        # Build a portfolio snapshot to push the moment the client connects.
+        snapshot: dict[str, Any] | None = None
+        ea = app.state.exec_adapter
+        if ea:
+            try:
+                positions = await ea.get_positions()
+                account = await ea.get_account()
+                snapshot = {
+                    "type": "execution.portfolio.update",
+                    "category": "execution",
+                    "data": {
+                        "positions": [p.model_dump(mode="json") if hasattr(p, "model_dump") else p for p in positions],
+                        "account": account,
+                    },
+                }
+            except Exception:
+                pass
+        await ws_manager.connect(ws, snapshot=snapshot)
         try:
             while True:
                 # Keep connection alive; client can send pings

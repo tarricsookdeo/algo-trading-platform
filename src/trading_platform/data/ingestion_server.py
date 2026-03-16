@@ -204,6 +204,8 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
                         await ws.send_json({"error": "invalid JSON"})
                         continue
                     response_fmt = Format.JSON
+                elif ws_msg.get("type") == "websocket.disconnect":
+                    break
                 else:
                     continue
 
@@ -220,17 +222,15 @@ def mount_ingestion_routes(app: FastAPI, data_manager: DataManager) -> None:
                         await ws.send_json(resp)
                     continue
 
-                # Single message
+                # Single message — fire-and-forget for streaming performance.
+                # Only send a response when there is an error so the sender's
+                # receive buffer is never filled with unread acks.
                 result = await _process_ws_message(msg, data_manager)
                 if "error" in result:
-                    resp = result
-                else:
-                    resp = {"status": "ok", "type": result.get("type", "")}
-
-                if response_fmt == Format.MSGPACK:
-                    await ws.send_bytes(serialize(resp, Format.MSGPACK))
-                else:
-                    await ws.send_json(resp)
+                    if response_fmt == Format.MSGPACK:
+                        await ws.send_bytes(serialize(result, Format.MSGPACK))
+                    else:
+                        await ws.send_json(result)
         except WebSocketDisconnect:
             pass
         except Exception:

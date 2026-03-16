@@ -6,7 +6,7 @@ max_bars_per_request = 10000
 
 [public_com]
 poll_interval = 2.0
-portfolio_refresh = 30.0
+portfolio_refresh = 5.0
 
 [risk]
 max_position_size = 1000.0

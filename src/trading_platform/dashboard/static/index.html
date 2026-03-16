@@ -121,8 +121,6 @@
   .quotes-table tr:hover td { background: var(--bg-tertiary); }
   .bid { color: var(--green); }
   .ask { color: var(--red); }
-  .flash { animation: flash-bg 0.6s ease-out; }
-  @keyframes flash-bg { 0% { background: rgba(88,166,255,0.2); } 100% { background: transparent; } }
 
   /* ── Trades Feed ────────────────────────────────────── */
   .trade-entry { display: flex; justify-content: space-between; padding: 3px 4px; border-bottom: 1px solid var(--bg-tertiary); font-size: 12px; }
@@ -154,6 +152,7 @@
 
   /* ── Portfolio ───────────────────────────────────────── */
   .position-row { display: flex; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--bg-tertiary); font-size: 12px; }
+  .position-header { color: var(--text-secondary); font-size: 10px; font-weight: 600; text-transform: uppercase; border-bottom: 1px solid var(--border); }
   .position-row .sym { font-weight: 600; min-width: 50px; }
   .position-row .qty { min-width: 40px; text-align: right; }
   .position-row .val { min-width: 70px; text-align: right; }
@@ -255,7 +254,8 @@
   <div class="header">
     <h1>Algo Trading Platform</h1>
     <div class="header-right">
-      <span><span class="status-dot disconnected" id="connDot"></span><span id="connText">Disconnected</span></span>
+      <span><span class="status-dot disconnected" id="connDot"></span><span id="connText">Platform Disconnected</span></span>
+      <span><span class="status-dot disconnected" id="acctDot"></span><span id="acctText">Public API Disconnected</span></span>
       <span>Uptime: <span id="uptime">0s</span></span>
       <span id="clock"></span>
     </div>
@@ -303,8 +303,15 @@
     <div class="panel-header">Portfolio &amp; Positions</div>
     <div class="panel-body">
       <div class="account-summary">
-        <div class="account-stat"><div class="label">Equity</div><div class="value" id="acctEquity">--</div></div>
-        <div class="account-stat"><div class="label">Buying Power</div><div class="value" id="acctBP">--</div></div>
+        <div class="account-stat"><div class="label">Cash BP</div><div class="value" id="acctBPCash">--</div></div>
+        <div class="account-stat"><div class="label">Total BP</div><div class="value" id="acctBPTotal">--</div></div>
+        <div class="account-stat"><div class="label">Options BP</div><div class="value" id="acctBPOptions">--</div></div>
+      </div>
+      <div class="position-row position-header">
+        <span class="sym">Ticker</span>
+        <span class="qty">Shares</span>
+        <span class="val">Value</span>
+        <span class="pnl">P/L</span>
       </div>
       <div id="positionsBody"><div class="placeholder">No positions</div></div>
     </div>
@@ -460,14 +467,16 @@ function connectWS() {
   ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.onopen = () => {
     document.getElementById('connDot').className = 'status-dot connected';
-    document.getElementById('connText').textContent = 'Connected';
+    document.getElementById('connText').textContent = 'Platform Connected';
     addLog('info', 'Dashboard WebSocket connected');
     refreshPortfolio(); refreshStrategies(); refreshRisk(); refreshPnl(); refreshOrders();
     refreshBrackets(); refreshTrailingStops(); refreshScaledOrders(); refreshGreeks(); refreshExpirations();
   };
   ws.onclose = () => {
     document.getElementById('connDot').className = 'status-dot disconnected';
-    document.getElementById('connText').textContent = 'Disconnected';
+    document.getElementById('connText').textContent = 'Platform Disconnected';
+    document.getElementById('acctDot').className = 'status-dot disconnected';
+    document.getElementById('acctText').textContent = 'Public API Disconnected';
     addLog('warn', 'Dashboard WebSocket disconnected, reconnecting...');
     setTimeout(connectWS, 2000);
   };
@@ -543,8 +552,25 @@ function onError(d) { addLog('error', JSON.stringify(d)); }
 function onStatus(d) { addLog('info', `[${d.symbol}] ${d.status_message || d.status_code || JSON.stringify(d)}`); }
 
 // ── Portfolio ──────────────────────────────────────────────────────
-function onPortfolioUpdate(d) { if (d.positions) renderPositions(d.positions); if (d.account) renderAccount(d.account); }
-function onAccountUpdate(d) { renderAccount(d); }
+// Cache positions per asset class so a crypto update with 0 positions
+// never wipes equity positions (and vice versa).
+const _posCache = { equity: [], crypto: [] };
+function onPortfolioUpdate(d) {
+  if (d.positions !== undefined) {
+    const key = d.asset_class || 'equity';
+    _posCache[key] = d.positions;
+    renderPositions(Object.values(_posCache).flat());
+  }
+  if (d.account) onAccountUpdate(d.account);
+}
+function onAccountUpdate(d) {
+  renderAccount(d);
+  // Mark account connected as soon as we receive any account data with buying power.
+  if (d.buying_power != null || d.buying_power_cash != null || d.status === 'connected') {
+    document.getElementById('acctDot').className = 'status-dot connected';
+    document.getElementById('acctText').textContent = 'Public API Connected';
+  }
+}
 function renderPositions(positions) {
   const body = document.getElementById('positionsBody');
   if (!positions || positions.length === 0) { body.innerHTML = '<div class="placeholder">No positions</div>'; return; }
@@ -560,12 +586,12 @@ function renderPositions(positions) {
   body.innerHTML = html;
 }
 function renderAccount(acct) {
-  if (acct.equity != null) document.getElementById('acctEquity').textContent = '$' + fmtNum(Math.round(acct.equity));
-  const bp = acct.buying_power_cash || acct.buying_power || 0;
-  if (bp) document.getElementById('acctBP').textContent = '$' + fmtNum(Math.round(bp));
+  if (acct.buying_power_cash != null) document.getElementById('acctBPCash').textContent = '$' + fmtNum(Math.round(acct.buying_power_cash));
+  if (acct.buying_power != null) document.getElementById('acctBPTotal').textContent = '$' + fmtNum(Math.round(acct.buying_power));
+  if (acct.buying_power_options != null) document.getElementById('acctBPOptions').textContent = '$' + fmtNum(Math.round(acct.buying_power_options));
 }
 async function refreshPortfolio() {
-  try { const r = await fetch('/api/portfolio'); const d = await r.json(); renderPositions(d.positions || []); renderAccount(d.account || {}); } catch(e) {}
+  try { const r = await fetch('/api/portfolio'); const d = await r.json(); _posCache.equity = d.positions || []; renderPositions(Object.values(_posCache).flat()); renderAccount(d.account || {}); } catch(e) {}
 }
 
 // ── Orders ─────────────────────────────────────────────────────────
@@ -813,7 +839,6 @@ function renderQuotes(flashSym) {
     c[4].textContent = fmtPrice(q.last);
     c[5].textContent = q.volume ? fmtNum(Math.round(q.volume)) : '--';
     c[6].textContent = q.ts ? new Date(q.ts).toLocaleTimeString() : '--';
-    if (sym === flashSym) { row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); }
   });
 }
 function addTrade(d, dir) {

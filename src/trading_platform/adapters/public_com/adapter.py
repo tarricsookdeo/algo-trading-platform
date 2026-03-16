@@ -73,6 +73,9 @@ class PublicComExecAdapter(ExecAdapter):
     async def connect(self) -> None:
         await self._client.connect()
         self._connected = True
+        # Sync immediately so buying power is available as soon as the platform starts,
+        # then the refresh loop takes over for periodic updates.
+        await self.sync_portfolio()
         self._portfolio_task = asyncio.create_task(self._portfolio_refresh_loop())
         self._log.info("public.com exec adapter connected")
         await self._bus.publish("execution.account.update", {"status": "connected"})
@@ -244,13 +247,20 @@ class PublicComExecAdapter(ExecAdapter):
             self._positions = positions
 
             account_data: dict[str, Any] = {}
-            if hasattr(portfolio, "buying_power") and portfolio.buying_power:
-                bp = portfolio.buying_power
-                account_data["buying_power_cash"] = float(getattr(bp, "cash", 0) or 0)
-                account_data["buying_power_margin"] = float(getattr(bp, "margin", 0) or 0)
-            if hasattr(portfolio, "equity"):
-                account_data["equity"] = float(getattr(portfolio, "equity", 0) or 0)
+            bp = getattr(portfolio, "buying_power", None)
+            if bp is not None:
+                account_data["buying_power_cash"] = float(getattr(bp, "cash_only_buying_power", 0) or 0)
+                account_data["buying_power"] = float(getattr(bp, "buying_power", 0) or 0)
+                account_data["buying_power_options"] = float(getattr(bp, "options_buying_power", 0) or 0)
+            # equity is a list of PortfolioEquity objects broken down by asset type
+            equity_list = getattr(portfolio, "equity", None)
+            if equity_list:
+                account_data["equity_total"] = sum(float(getattr(eq, "value", 0) or 0) for eq in equity_list)
+                for eq in equity_list:
+                    type_name = str(getattr(getattr(eq, "type", None), "value", "unknown")).lower()
+                    account_data[f"equity_{type_name}"] = float(getattr(eq, "value", 0) or 0)
             self._account_info = account_data
+            self._log.info("portfolio synced", positions=len(positions), account_keys=list(account_data.keys()))
 
             await self._bus.publish("execution.portfolio.update", {
                 "positions": [p.model_dump(mode="json") for p in positions],
@@ -260,6 +270,8 @@ class PublicComExecAdapter(ExecAdapter):
 
         except APIError as exc:
             self._log.error("portfolio sync failed", error=str(exc))
+        except Exception as exc:
+            self._log.error("portfolio sync unexpected error", error=str(exc))
 
     # ── Internal ──────────────────────────────────────────────────────
 

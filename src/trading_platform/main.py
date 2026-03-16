@@ -388,6 +388,11 @@ def main() -> None:
     """CLI entry point."""
     args = parse_args()
 
+    # Load .env into os.environ before anything else so that all settings
+    # classes (PublicComSettings, CryptoSettings, etc.) can read credentials.
+    from dotenv import load_dotenv
+    load_dotenv()
+
     # Install uvloop BEFORE asyncio.run() creates the event loop
     uvloop_active = _install_uvloop(args.config)
 

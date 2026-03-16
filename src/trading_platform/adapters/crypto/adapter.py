@@ -129,27 +129,35 @@ class CryptoExecAdapter(ExecAdapter):
         return dict(self._account_info)
 
     async def sync_portfolio(self) -> None:
-        """Fetch crypto portfolio and update cached state."""
+        """Fetch crypto portfolio and update cached state.
+
+        Crypto positions live in the same get_portfolio() response as equities.
+        Filter by instrument type CRYPTO to isolate them.
+        """
         try:
-            portfolio = await self._client.get_crypto_portfolio()
+            portfolio = await self._client.get_portfolio()
 
             positions: list[Position] = []
-            if hasattr(portfolio, "positions") and portfolio.positions:
-                for pos in portfolio.positions:
-                    symbol = getattr(pos, "symbol", "")
-                    quantity = Decimal(str(getattr(pos, "quantity", 0) or 0))
-                    avg_price = float(getattr(pos, "average_price", 0) or 0)
-                    market_value = float(getattr(pos, "market_value", 0) or 0)
-                    unrealized = float(getattr(pos, "unrealized_pnl", 0) or 0)
-                    side = "long" if quantity >= 0 else "short"
-                    positions.append(Position(
-                        symbol=symbol,
-                        quantity=abs(quantity),
-                        avg_entry_price=avg_price,
-                        market_value=market_value,
-                        unrealized_pnl=unrealized,
-                        side=side,
-                    ))
+            for pos in (getattr(portfolio, "positions", None) or []):
+                instrument = getattr(pos, "instrument", None)
+                inst_type = str(getattr(getattr(instrument, "type", None), "value", "")).upper()
+                if inst_type != "CRYPTO":
+                    continue
+                symbol = getattr(instrument, "symbol", "") if instrument else ""
+                quantity = Decimal(str(getattr(pos, "quantity", 0) or 0))
+                market_value = float(getattr(pos, "current_value", 0) or 0)
+                cost_basis = getattr(pos, "cost_basis", None)
+                avg_price = float(getattr(cost_basis, "unit_cost", 0) or 0) if cost_basis else 0.0
+                unrealized = float(getattr(cost_basis, "gain_value", 0) or 0) if cost_basis else 0.0
+                side = "long" if quantity >= 0 else "short"
+                positions.append(Position(
+                    symbol=symbol,
+                    quantity=abs(quantity),
+                    avg_entry_price=avg_price,
+                    market_value=market_value,
+                    unrealized_pnl=unrealized,
+                    side=side,
+                ))
             self._positions = positions
 
             await self._bus.publish("execution.portfolio.update", {

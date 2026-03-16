@@ -67,10 +67,17 @@ class DashboardWSManager:
             except asyncio.CancelledError:
                 pass
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket, snapshot: dict[str, Any] | None = None) -> None:
         await ws.accept()
         self._clients.append(ws)
         self._log.info("dashboard client connected", total=len(self._clients))
+        # Push cached state immediately so the browser doesn't wait for the
+        # next periodic refresh to show buying power and positions.
+        if snapshot:
+            try:
+                await ws.send_text(json.dumps(snapshot, default=str))
+            except Exception:
+                pass
 
     async def disconnect(self, ws: WebSocket) -> None:
         if ws in self._clients:
