@@ -256,7 +256,21 @@ class PublicComExecAdapter(ExecAdapter):
             if hasattr(portfolio, "positions") and portfolio.positions:
                 for pos in portfolio.positions:
                     positions.append(sdk_position_to_platform(pos))
-            self._positions = positions
+
+            # Guard against transient empty-portfolio responses from the API.
+            # If we previously had positions and the API now returns none, this
+            # is almost certainly a settlement delay or brief API inconsistency —
+            # keep the last known positions rather than broadcasting an empty list
+            # that would flash "No positions" in the dashboard.
+            if not positions and self._positions:
+                self._log.warning(
+                    "portfolio sync returned 0 positions but cache has %d — "
+                    "skipping update to avoid transient flash",
+                    len(self._positions),
+                )
+                positions = self._positions  # retain last known good state
+            else:
+                self._positions = positions
 
             account_data: dict[str, Any] = {}
             bp = getattr(portfolio, "buying_power", None)
@@ -289,14 +303,14 @@ class PublicComExecAdapter(ExecAdapter):
 
     async def _track_order(self, order_id: str, async_order: Any) -> None:
         """Track an order's status via polling until terminal."""
-        _fill_published = False
+        _terminal_published = False
 
         async def _publish_status(raw_status: Any) -> None:
-            nonlocal _fill_published
+            nonlocal _terminal_published
             status_name = str(raw_status.name) if hasattr(raw_status, "name") else str(raw_status)
             status_upper = status_name.upper()
             if status_upper == "FILLED":
-                _fill_published = True
+                _terminal_published = True
                 await self._bus.publish("execution.order.filled", {
                     "order_id": order_id,
                     "status": status_upper,
@@ -307,11 +321,13 @@ class PublicComExecAdapter(ExecAdapter):
                     "status": status_upper,
                 })
             elif status_upper in ("CANCELLED", "CANCELED"):
+                _terminal_published = True
                 await self._bus.publish("execution.order.cancelled", {
                     "order_id": order_id,
                     "status": status_upper,
                 })
             elif status_upper == "REJECTED":
+                _terminal_published = True
                 await self._bus.publish("execution.order.rejected", {
                     "order_id": order_id,
                     "status": status_upper,
@@ -337,9 +353,9 @@ class PublicComExecAdapter(ExecAdapter):
             await async_order.subscribe_updates(on_update)
             await async_order.wait_for_terminal_status(timeout=300)
 
-            # Fallback: if the on_update callback never fired successfully, derive
+            # Fallback: if no terminal event was published via on_update, derive
             # the final status from the order object directly and publish now.
-            if not _fill_published:
+            if not _terminal_published:
                 raw = (
                     getattr(async_order, "status", None)
                     or getattr(async_order, "order_status", None)
@@ -348,15 +364,13 @@ class PublicComExecAdapter(ExecAdapter):
                 if raw is not None:
                     await _publish_status(raw)
                 else:
-                    # Last resort: assume FILLED since wait_for_terminal_status completed
+                    # Last resort: status unreadable — log a warning but do NOT
+                    # assume FILLED, as doing so for a cancelled stop-loss would
+                    # falsely mark the bracket as STOPPED_OUT and prevent TP exit.
                     self._log.warning(
-                        "could not read terminal status from order object — assuming FILLED",
+                        "could not read terminal status from order object — no event published",
                         order_id=order_id,
                     )
-                    await self._bus.publish("execution.order.filled", {
-                        "order_id": order_id,
-                        "status": "FILLED",
-                    })
         except Exception as exc:
             self._log.warning("order tracking ended", order_id=order_id, error=str(exc))
         finally:

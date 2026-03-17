@@ -80,7 +80,7 @@ class BracketOrderManager:
             quantity: Number of shares.
             entry_type: MARKET or LIMIT.
             stop_loss_price: Price for resting stop-loss order.
-            take_profit_price: Bid price level that triggers take-profit.
+            take_profit_price: Ask price level that triggers take-profit.
             entry_limit_price: Required if entry_type is LIMIT.
             trailing_stop: If True, use trailing stop instead of fixed stop-loss.
             trail_amount: Absolute dollar trail (requires trailing_stop=True).
@@ -308,8 +308,11 @@ class BracketOrderManager:
             bracket_id = self._stop_to_bracket[order_id]
             bracket = self._brackets.get(bracket_id)
             if bracket and bracket.state == BracketState.TAKE_PROFIT_TRIGGERED:
-                # Stop cancelled as expected — now place market sell
-                await self._place_take_profit_sell(bracket)
+                # Stop cancelled as expected — place market sell (idempotent guard
+                # prevents double-placement when both cancel_order and _track_order
+                # both publish execution.order.cancelled for the same stop-loss).
+                if bracket.take_profit_order_id is None:
+                    await self._place_take_profit_sell(bracket)
             elif bracket and bracket.state == BracketState.CANCELED:
                 # Stop cancelled as part of bracket cancel — already handled
                 pass
@@ -337,13 +340,27 @@ class BracketOrderManager:
         pass
 
     async def _on_quote(self, channel: str, event: Any) -> None:
-        """Monitor bid prices for take-profit triggers."""
+        """Monitor ask prices for take-profit triggers.
+
+        Uses ask_price for the comparison because take_profit_price is set
+        relative to the entry ask (entry_ask + offset).  Comparing the bid
+        would require the ask to move offset + spread above entry before
+        triggering — with a $0.05 offset and a $0.05 spread the TP would
+        never fire even when the observable market price has reached the
+        target.  The market-sell order placed on trigger fills near the bid,
+        which is acceptable; the offset just needs to exceed the spread to
+        be profitable.
+
+        Falls back to bid_price when ask is unavailable.
+        """
         if isinstance(event, QuoteTick):
             symbol = event.symbol
-            bid_price = Decimal(str(event.bid_price))
+            ask_price = Decimal(str(event.ask_price or event.bid_price))
         elif isinstance(event, dict) and "symbol" in event:
             symbol = event["symbol"]
-            bid_price = Decimal(str(event.get("bid_price", 0)))
+            ask_price = Decimal(str(
+                event.get("ask_price") or event.get("bid_price") or 0
+            ))
         else:
             return
 
@@ -354,12 +371,12 @@ class BracketOrderManager:
             if (
                 bracket.symbol == symbol
                 and bracket.state == BracketState.MONITORING
-                and bid_price >= bracket.take_profit_price
+                and ask_price >= bracket.take_profit_price
             ):
                 self._log.info(
                     "take-profit triggered",
                     bracket_id=bracket.bracket_id,
-                    bid=str(bid_price),
+                    ask=str(ask_price),
                     target=str(bracket.take_profit_price),
                 )
                 await self._trigger_take_profit(bracket)

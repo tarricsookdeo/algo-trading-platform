@@ -787,14 +787,22 @@ function onStatus(d) { addLog('info', `[${d.symbol}] ${d.status_message || d.sta
 const _posCache = { equity: [], crypto: [] };
 function onPortfolioUpdate(d) {
   if (d.positions !== undefined) {
+    const incoming = d.positions;
     const key = (d.asset_class || 'equity').toLowerCase();
-    if (key === 'crypto') {
-      _posCache.crypto = d.positions;
-    } else {
-      _posCache.equity = d.positions.filter(p => (p.asset_class || 'EQUITY').toUpperCase() !== 'CRYPTO');
-      _posCache.crypto = d.positions.filter(p => (p.asset_class || '').toUpperCase() === 'CRYPTO');
+    // Don't flash "No positions" when a single update returns an empty list
+    // while we know we hold positions — broker APIs can transiently return []
+    // during settlement or right after a fill. Only clear when incoming is
+    // non-empty (real update) or when the cache is already empty.
+    const currentTotal = _posCache.equity.length + _posCache.crypto.length;
+    if (incoming.length > 0 || currentTotal === 0) {
+      if (key === 'crypto') {
+        _posCache.crypto = incoming;
+      } else {
+        _posCache.equity = incoming.filter(p => (p.asset_class || 'EQUITY').toUpperCase() !== 'CRYPTO');
+        _posCache.crypto = incoming.filter(p => (p.asset_class || '').toUpperCase() === 'CRYPTO');
+      }
+      renderPositions(Object.values(_posCache).flat());
     }
-    renderPositions(Object.values(_posCache).flat());
   }
   if (d.account) onAccountUpdate(d.account);
 }

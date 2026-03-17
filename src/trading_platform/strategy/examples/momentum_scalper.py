@@ -44,8 +44,8 @@ class MomentumScalperStrategy(Strategy):
     def __init__(self, name: str, event_bus: EventBus, config: dict[str, Any] | None = None) -> None:
         super().__init__(name, event_bus, config)
         self.symbols: list[str] = self.config.get("symbols", ["TQQQ", "SOXL"])
-        self.quantity = Decimal(str(self.config.get("quantity", 10)))
-        self.take_profit_offset = Decimal(str(self.config.get("take_profit", "0.05")))
+        self.quantity = Decimal(str(self.config.get("quantity", 20)))
+        self.take_profit_offset = Decimal(str(self.config.get("take_profit", "0.15")))
         self.stop_loss_offset = Decimal(str(self.config.get("stop_loss", "1.00")))
         self.momentum_window: int = int(self.config.get("momentum_window", 3))
         self.max_spread = Decimal(str(self.config.get("max_spread", "0.10")))
