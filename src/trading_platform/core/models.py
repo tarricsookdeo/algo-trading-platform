@@ -185,6 +185,7 @@ class Position(BaseModel):
     market_value: float = 0.0
     unrealized_pnl: float = 0.0
     side: str = ""
+    asset_class: AssetClass = AssetClass.EQUITY
 
 
 class SystemEvent(BaseModel):

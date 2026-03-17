@@ -26,7 +26,12 @@ def data_manager(bus):
 
 @pytest.fixture
 def client(bus, data_manager):
-    app, _ = create_app(bus, data_manager=data_manager)
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        app, _ = loop.run_until_complete(create_app(bus, data_manager=data_manager))
+    finally:
+        loop.close()
     return TestClient(app)
 
 
@@ -126,6 +131,7 @@ class TestDataStatusEndpoints:
 
 class TestWebSocketIngestion:
     def test_ws_ingest_bar(self, client, data_manager):
+        # Single-message ingestion uses fire-and-forget (no ack on success)
         with client.websocket_connect("/ws/data") as ws:
             ws.send_text(json.dumps({
                 "type": "bar",
@@ -135,9 +141,6 @@ class TestWebSocketIngestion:
                     "volume": 10000, "timestamp": "2024-01-15T09:30:00",
                 },
             }))
-            resp = ws.receive_json()
-            assert resp["status"] == "ok"
-            assert resp["type"] == "bar"
         assert data_manager.bars_received == 1
 
     def test_ws_ingest_unknown_type(self, client):

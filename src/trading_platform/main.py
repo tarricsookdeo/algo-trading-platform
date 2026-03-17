@@ -40,7 +40,6 @@ from trading_platform.options.greeks import GreeksProvider
 from trading_platform.risk.greeks_checks import GreeksRiskConfig
 from trading_platform.risk.manager import RiskManager
 from trading_platform.risk.models import RiskConfig
-from trading_platform.strategy.examples.momentum_scalper import MomentumScalperStrategy
 from trading_platform.strategy.manager import StrategyManager
 
 BANNER = r"""
@@ -266,13 +265,17 @@ async def run(args: argparse.Namespace, *, uvloop_active: bool = False) -> None:
     )
 
     # ── Dashboard ──────────────────────────────────────────────────────
-    app, ws_manager = create_app(
+    app, ws_manager = await create_app(
         event_bus,
         data_manager=data_manager,
         exec_adapter=exec_adapter,
         strategy_manager=strategy_manager,
         risk_manager=risk_manager,
         bracket_manager=bracket_manager,
+        trailing_stop_manager=bracket_manager.trailing_stop_manager,
+        scaled_order_manager=bracket_manager.scaled_order_manager,
+        greeks_provider=greeks_provider,
+        expiration_manager=expiration_manager,
         message_queue=message_queue,
         perf_metrics=perf_metrics,
         throttler=throttler,
@@ -303,29 +306,54 @@ async def run(args: argparse.Namespace, *, uvloop_active: bool = False) -> None:
         await expiration_manager.start()
         log.info("expiration manager started")
 
-        # Wire bracket and strategy manager events
+        # Wire risk, bracket, and strategy manager events
+        await risk_manager.wire_events(event_bus)
+        log.info("risk manager events wired")
         await bracket_manager.wire_events()
         log.info("bracket order manager events wired")
         await strategy_manager.wire_events()
         log.info("strategy manager events wired")
 
-        # ── Strategies ────────────────────────────────────────────────
-        scalper = MomentumScalperStrategy(
-            name="momentum_scalper",
-            event_bus=event_bus,
-            config={
-                "symbols": ["TQQQ", "SOXL"],
-                "quantity": 10,
-                "take_profit": "0.05",
-                "stop_loss": "1.00",
-                "momentum_window": 3,
-                "max_spread": "0.10",
-                "cooldown_seconds": 60,
-            },
-        )
-        strategy_manager.register(scalper)
-        await strategy_manager.start_strategy("momentum_scalper")
-        log.info("momentum scalper strategy started")
+        # ── Daily risk reset ──────────────────────────────────────────
+        import datetime as _dt
+
+        async def _daily_risk_reset_loop() -> None:
+            while True:
+                now = _dt.datetime.now(_dt.timezone.utc)
+                next_midnight = (now + _dt.timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                await asyncio.sleep((next_midnight - now).total_seconds())
+                await risk_manager.reset_daily()
+                log.info("daily risk counters reset at midnight UTC")
+
+        reset_task = asyncio.create_task(_daily_risk_reset_loop())
+        log.info("daily risk reset scheduled")
+
+        # ── Strategies (loaded from config.toml [[strategies]]) ───────
+        import importlib
+        for strat_def in settings.strategies:
+            if not strat_def.enabled:
+                log.info("strategy disabled, skipping", strategy=strat_def.name)
+                continue
+            try:
+                mod = importlib.import_module(strat_def.module)
+                klass = getattr(mod, strat_def.class_name)
+                strategy = klass(
+                    name=strat_def.name,
+                    event_bus=event_bus,
+                    config=strat_def.config,
+                )
+                strategy_manager.register(strategy)
+                await strategy_manager.start_strategy(strat_def.name)
+                log.info("strategy started", strategy=strat_def.name)
+            except Exception as exc:
+                log.error(
+                    "failed to load strategy",
+                    strategy=strat_def.name,
+                    module=strat_def.module,
+                    error=str(exc),
+                )
 
         # Start WS manager
         await ws_manager.start()
@@ -359,10 +387,16 @@ async def run(args: argparse.Namespace, *, uvloop_active: bool = False) -> None:
 
     finally:
         log.info("shutting down platform")
+        reset_task.cancel()
+        try:
+            await reset_task
+        except asyncio.CancelledError:
+            pass
         await expiration_manager.stop()
         await strategy_manager.stop_all()
         await strategy_manager.unwire_events()
         await bracket_manager.unwire_events()
+        await risk_manager.unwire_events(event_bus)
         await ws_manager.stop()
         await message_queue.stop()
         if exec_adapter:

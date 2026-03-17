@@ -48,6 +48,16 @@ class BracketOrderManager:
         self._trailing_to_bracket: dict[str, str] = {}
         self._scaled_to_bracket: dict[str, str] = {}
 
+    # ── Sub-manager access ─────────────────────────────────────────────
+
+    @property
+    def trailing_stop_manager(self) -> TrailingStopManager:
+        return self._trailing_stop_mgr
+
+    @property
+    def scaled_order_manager(self) -> ScaledOrderManager:
+        return self._scaled_order_mgr
+
     # ── Public API ─────────────────────────────────────────────────────
 
     async def submit_bracket_order(

@@ -96,6 +96,10 @@ class StrategyContext:
         stop_loss_price: Decimal,
         take_profit_price: Decimal,
         entry_limit_price: Decimal | None = None,
+        trailing_stop: bool = False,
+        trail_amount: Decimal | None = None,
+        trail_percent: Decimal | None = None,
+        take_profit_levels: list[tuple[Decimal, Decimal]] | None = None,
     ) -> "BracketOrder | None":
         """Submit a bracket order through the BracketOrderManager."""
         if not self._bracket:
@@ -108,6 +112,10 @@ class StrategyContext:
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
             entry_limit_price=entry_limit_price,
+            trailing_stop=trailing_stop,
+            trail_amount=trail_amount,
+            trail_percent=trail_percent,
+            take_profit_levels=take_profit_levels,
         )
 
     async def cancel_bracket_order(self, bracket_id: str) -> bool:

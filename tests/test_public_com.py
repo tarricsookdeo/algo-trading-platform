@@ -142,12 +142,12 @@ class TestSdkOrderToPlatform:
 
 class TestSdkPositionToPlatform:
     def test_long_position(self):
+        # v2 API: symbol nested in instrument, cost basis in cost_basis object
         sdk_pos = SimpleNamespace(
-            symbol="AAPL",
+            instrument=SimpleNamespace(symbol="AAPL"),
             quantity=100,
-            average_price=150.0,
-            market_value=15500.0,
-            unrealized_pnl=500.0,
+            current_value=15500.0,
+            cost_basis=SimpleNamespace(unit_cost=150.0, gain_value=500.0),
         )
         pos = sdk_position_to_platform(sdk_pos)
         assert pos.symbol == "AAPL"
@@ -159,11 +159,10 @@ class TestSdkPositionToPlatform:
 
     def test_short_position(self):
         sdk_pos = SimpleNamespace(
-            symbol="TSLA",
+            instrument=SimpleNamespace(symbol="TSLA"),
             quantity=-50,
-            average_price=200.0,
-            market_value=9500.0,
-            unrealized_pnl=500.0,
+            current_value=9500.0,
+            cost_basis=SimpleNamespace(unit_cost=200.0, gain_value=500.0),
         )
         pos = sdk_position_to_platform(sdk_pos)
         assert pos.quantity == Decimal("50")  # absolute value
@@ -265,18 +264,22 @@ async def test_adapter_get_account(adapter):
 
 @pytest.mark.asyncio
 async def test_adapter_sync_portfolio(adapter, mock_client, bus):
+    # v2 API: equity is a list of PortfolioEquity objects, buying_power has new fields
     mock_portfolio = SimpleNamespace(
         positions=[
             SimpleNamespace(
-                symbol="AAPL",
+                instrument=SimpleNamespace(symbol="AAPL"),
                 quantity=100,
-                average_price=150.0,
-                market_value=15500.0,
-                unrealized_pnl=500.0,
+                current_value=15500.0,
+                cost_basis=SimpleNamespace(unit_cost=150.0, gain_value=500.0),
             ),
         ],
-        buying_power=SimpleNamespace(cash=50000, margin=100000),
-        equity=115500,
+        buying_power=SimpleNamespace(
+            cash_only_buying_power=50000,
+            buying_power=100000,
+            options_buying_power=25000,
+        ),
+        equity=[SimpleNamespace(value=115500, type=SimpleNamespace(value="equity"))],
     )
     mock_client.get_portfolio.return_value = mock_portfolio
 
@@ -288,5 +291,5 @@ async def test_adapter_sync_portfolio(adapter, mock_client, bus):
     await bus.subscribe("execution.portfolio.update", handler)
     await adapter.sync_portfolio()
     assert len(adapter._positions) == 1
-    assert adapter._account_info["equity"] == 115500
+    assert adapter._account_info["equity_total"] == 115500.0
     assert "execution.portfolio.update" in received

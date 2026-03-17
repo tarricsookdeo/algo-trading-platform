@@ -10,7 +10,7 @@ from typing import Any
 from trading_platform.adapters.base import ExecAdapter
 from trading_platform.adapters.crypto.client import CryptoClient
 from trading_platform.adapters.crypto.config import CryptoConfig
-from trading_platform.core.enums import OrderSide, OrderType
+from trading_platform.core.enums import AssetClass, OrderSide, OrderType
 from trading_platform.core.events import EventBus
 from trading_platform.core.logging import get_logger
 from trading_platform.core.models import Order, Position
@@ -31,6 +31,7 @@ class CryptoExecAdapter(ExecAdapter):
         self._connected = False
         self._portfolio_task: asyncio.Task[None] | None = None
         self._tracked_orders: dict[str, Any] = {}
+        self._order_details: dict[str, dict] = {}
         self._positions: list[Position] = []
         self._account_info: dict[str, Any] = {}
 
@@ -83,6 +84,13 @@ class CryptoExecAdapter(ExecAdapter):
             order.order_id = order_id
             order.status = "new"
             self._tracked_orders[order_id] = async_order
+            self._order_details[order_id] = {
+                "symbol": order.symbol,
+                "side": str(order.side.value if hasattr(order.side, "value") else order.side),
+                "order_type": str(order.order_type.value if hasattr(order.order_type, "value") else order.order_type),
+                "quantity": str(order.quantity),
+                "asset_class": "crypto",
+            }
 
             await self._bus.publish("execution.order.submitted", {
                 "order_id": order_id,
@@ -157,6 +165,7 @@ class CryptoExecAdapter(ExecAdapter):
                     market_value=market_value,
                     unrealized_pnl=unrealized,
                     side=side,
+                    asset_class=AssetClass.CRYPTO,
                 ))
             self._positions = positions
 
@@ -171,46 +180,106 @@ class CryptoExecAdapter(ExecAdapter):
 
     async def _track_order(self, order_id: str, async_order: Any) -> None:
         """Track a crypto order's status until terminal."""
+        _fill_published = False
+
+        async def _publish_status(raw_status: Any) -> None:
+            nonlocal _fill_published
+            status_name = str(raw_status.name) if hasattr(raw_status, "name") else str(raw_status)
+            status_upper = status_name.upper()
+            if status_upper == "FILLED":
+                _fill_published = True
+                await self._bus.publish("execution.order.filled", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+            elif status_upper == "PARTIALLY_FILLED":
+                await self._bus.publish("execution.order.partially_filled", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+            elif status_upper in ("CANCELLED", "CANCELED"):
+                await self._bus.publish("execution.order.cancelled", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+            elif status_upper == "REJECTED":
+                await self._bus.publish("execution.order.rejected", {
+                    "order_id": order_id,
+                    "status": status_upper,
+                })
+
         try:
             async def on_update(update: Any) -> None:
-                status_name = str(update.status.name) if hasattr(update.status, "name") else str(update.status)
-                status_upper = status_name.upper()
-
-                if status_upper == "FILLED":
-                    await self._bus.publish("execution.order.filled", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
-                elif status_upper == "PARTIALLY_FILLED":
-                    await self._bus.publish("execution.order.partially_filled", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
-                elif status_upper in ("CANCELLED", "CANCELED"):
-                    await self._bus.publish("execution.order.cancelled", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
-                elif status_upper == "REJECTED":
-                    await self._bus.publish("execution.order.rejected", {
-                        "order_id": order_id,
-                        "status": status_upper,
-                    })
+                # SDK may use .status, .order_status, or .state — try all
+                raw = (
+                    getattr(update, "status", None)
+                    or getattr(update, "order_status", None)
+                    or getattr(update, "state", None)
+                )
+                if raw is None:
+                    self._log.debug(
+                        "crypto order update with unknown status field",
+                        order_id=order_id,
+                        attrs=[a for a in dir(update) if not a.startswith("_")],
+                    )
+                    return
+                await _publish_status(raw)
 
             await async_order.subscribe_updates(on_update)
             await async_order.wait_for_terminal_status(timeout=300)
+
+            # Fallback: if on_update never fired successfully, derive final status
+            # from the order object directly.
+            if not _fill_published:
+                raw = (
+                    getattr(async_order, "status", None)
+                    or getattr(async_order, "order_status", None)
+                    or getattr(async_order, "state", None)
+                )
+                if raw is not None:
+                    await _publish_status(raw)
+                else:
+                    # Last resort: assume FILLED since wait_for_terminal_status completed
+                    self._log.warning(
+                        "could not read terminal status from crypto order — assuming FILLED",
+                        order_id=order_id,
+                    )
+                    await self._bus.publish("execution.order.filled", {
+                        "order_id": order_id,
+                        "status": "FILLED",
+                    })
         except Exception as exc:
             self._log.warning("crypto order tracking ended", order_id=order_id, error=str(exc))
         finally:
             self._tracked_orders.pop(order_id, None)
+            self._order_details.pop(order_id, None)
 
     async def _portfolio_refresh_loop(self) -> None:
-        """Periodically refresh crypto portfolio state."""
+        """Periodically refresh crypto portfolio state, reconnecting on repeated failures."""
+        _consecutive_errors = 0
+        _MAX_ERRORS_BEFORE_RECONNECT = 5
         while True:
             try:
                 await asyncio.sleep(self._config.portfolio_refresh)
                 await self.sync_portfolio()
+                _consecutive_errors = 0
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._log.warning("crypto portfolio refresh error", error=str(exc))
+                _consecutive_errors += 1
+                self._log.warning(
+                    "crypto portfolio refresh error",
+                    error=str(exc),
+                    consecutive_errors=_consecutive_errors,
+                )
+                if _consecutive_errors >= _MAX_ERRORS_BEFORE_RECONNECT:
+                    self._log.error(
+                        "too many consecutive errors, attempting crypto adapter reconnect"
+                    )
+                    try:
+                        await self._client.disconnect()
+                        await self._client.connect()
+                        _consecutive_errors = 0
+                        self._log.info("crypto adapter reconnected successfully")
+                    except Exception as reconn_exc:
+                        self._log.error("crypto reconnect failed", error=str(reconn_exc))

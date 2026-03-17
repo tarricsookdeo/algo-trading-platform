@@ -67,6 +67,7 @@ class PublicComExecAdapter(ExecAdapter):
         self._connected = False
         self._portfolio_task: asyncio.Task[None] | None = None
         self._tracked_orders: dict[str, Any] = {}
+        self._order_details: dict[str, dict] = {}
         self._positions: list[Position] = []
         self._account_info: dict[str, Any] = {}
 
@@ -95,9 +96,11 @@ class PublicComExecAdapter(ExecAdapter):
         """Submit an order to Public.com."""
         order_id = order.order_id or str(uuid.uuid4())
         try:
-            instrument_type = InstrumentType.EQUITY
-            if order.symbol and len(order.symbol) > 10:
-                instrument_type = InstrumentType.OPTION
+            instrument_type = (
+                InstrumentType.OPTION
+                if order.asset_class == AssetClass.OPTION
+                else InstrumentType.EQUITY
+            )
 
             kwargs: dict[str, Any] = {
                 "order_id": order_id,
@@ -120,6 +123,13 @@ class PublicComExecAdapter(ExecAdapter):
             order.order_id = order_id
             order.status = "new"
             self._tracked_orders[order_id] = async_order
+            self._order_details[order_id] = {
+                "symbol": order.symbol,
+                "side": str(order.side.value if hasattr(order.side, "value") else order.side),
+                "order_type": str(order.order_type.value if hasattr(order.order_type, "value") else order.order_type),
+                "quantity": str(order.quantity),
+                "asset_class": str(order.asset_class.value if hasattr(order.asset_class, "value") else order.asset_class),
+            }
 
             await self._bus.publish("execution.order.submitted", {
                 "order_id": order_id,
@@ -222,9 +232,11 @@ class PublicComExecAdapter(ExecAdapter):
 
     async def perform_preflight(self, order: Order) -> Any:
         """Run preflight check for a single-leg order."""
-        instrument_type = InstrumentType.EQUITY
-        if order.symbol and len(order.symbol) > 10:
-            instrument_type = InstrumentType.OPTION
+        instrument_type = (
+            InstrumentType.OPTION
+            if order.asset_class == AssetClass.OPTION
+            else InstrumentType.EQUITY
+        )
 
         request = PreflightRequest(
             instrument=OrderInstrument(symbol=order.symbol, type=instrument_type),
@@ -349,14 +361,34 @@ class PublicComExecAdapter(ExecAdapter):
             self._log.warning("order tracking ended", order_id=order_id, error=str(exc))
         finally:
             self._tracked_orders.pop(order_id, None)
+            self._order_details.pop(order_id, None)
 
     async def _portfolio_refresh_loop(self) -> None:
-        """Periodically refresh portfolio state."""
+        """Periodically refresh portfolio state, reconnecting on repeated failures."""
+        _consecutive_errors = 0
+        _MAX_ERRORS_BEFORE_RECONNECT = 5
         while True:
             try:
                 await asyncio.sleep(self._config.portfolio_refresh)
                 await self.sync_portfolio()
+                _consecutive_errors = 0
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._log.warning("portfolio refresh error", error=str(exc))
+                _consecutive_errors += 1
+                self._log.warning(
+                    "portfolio refresh error",
+                    error=str(exc),
+                    consecutive_errors=_consecutive_errors,
+                )
+                if _consecutive_errors >= _MAX_ERRORS_BEFORE_RECONNECT:
+                    self._log.error(
+                        "too many consecutive errors, attempting adapter reconnect"
+                    )
+                    try:
+                        await self._client.disconnect()
+                        await self._client.connect()
+                        _consecutive_errors = 0
+                        self._log.info("adapter reconnected successfully")
+                    except Exception as reconn_exc:
+                        self._log.error("reconnect failed", error=str(reconn_exc))

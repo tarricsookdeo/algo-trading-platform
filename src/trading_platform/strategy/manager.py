@@ -267,6 +267,14 @@ class StrategyManager:
         else:
             entry.losses += 1
 
+    async def _on_bracket_discarded(self, channel: str, event: Any) -> None:
+        """Clean up tracking entry when a bracket is cancelled or errors without filling."""
+        if not isinstance(event, dict):
+            return
+        bracket_id = event.get("bracket_id")
+        if bracket_id:
+            self._bracket_to_strategy.pop(bracket_id, None)
+
     async def wire_events(self) -> None:
         """Subscribe to EventBus channels to dispatch to strategies."""
         await self._bus.subscribe(Channel.QUOTE, self.dispatch_quote)
@@ -277,6 +285,8 @@ class StrategyManager:
         await self._bus.subscribe("strategy.signal", self._on_strategy_signal)
         await self._bus.subscribe(BracketChannel.BRACKET_TAKE_PROFIT_FILLED, self._on_bracket_completed)
         await self._bus.subscribe(BracketChannel.BRACKET_STOPPED_OUT, self._on_bracket_completed)
+        await self._bus.subscribe(BracketChannel.BRACKET_CANCELED, self._on_bracket_discarded)
+        await self._bus.subscribe(BracketChannel.BRACKET_ERROR, self._on_bracket_discarded)
 
     async def unwire_events(self) -> None:
         await self._bus.unsubscribe(Channel.QUOTE, self.dispatch_quote)
@@ -287,6 +297,8 @@ class StrategyManager:
         await self._bus.unsubscribe("strategy.signal", self._on_strategy_signal)
         await self._bus.unsubscribe(BracketChannel.BRACKET_TAKE_PROFIT_FILLED, self._on_bracket_completed)
         await self._bus.unsubscribe(BracketChannel.BRACKET_STOPPED_OUT, self._on_bracket_completed)
+        await self._bus.unsubscribe(BracketChannel.BRACKET_CANCELED, self._on_bracket_discarded)
+        await self._bus.unsubscribe(BracketChannel.BRACKET_ERROR, self._on_bracket_discarded)
 
     def get_strategy_info(self) -> list[dict[str, Any]]:
         """Return info about all registered strategies."""

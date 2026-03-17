@@ -21,6 +21,8 @@ from trading_platform.risk.checks import (
 )
 from trading_platform.risk.models import RiskConfig, RiskState, RiskViolation
 
+_TERMINAL_ORDER_EVENTS = {"execution.order.filled", "execution.order.cancelled", "execution.order.rejected"}
+
 
 class RiskManager:
     """Manages pre-trade and post-trade risk checks.
@@ -37,6 +39,49 @@ class RiskManager:
         # Optional greeks risk components (set via register_greeks_checks)
         self._greeks_provider: Any | None = None
         self._greeks_config: Any | None = None
+
+    async def wire_events(self, event_bus: EventBus) -> None:
+        """Subscribe to execution events to keep risk state current automatically."""
+        self._event_bus = event_bus
+        await event_bus.subscribe("execution.order.submitted", self._on_order_submitted)
+        await event_bus.subscribe("execution.order.filled", self._on_order_terminal)
+        await event_bus.subscribe("execution.order.cancelled", self._on_order_terminal)
+        await event_bus.subscribe("execution.order.rejected", self._on_order_terminal)
+        await event_bus.subscribe("execution.portfolio.update", self._on_portfolio_update)
+
+    async def unwire_events(self, event_bus: EventBus) -> None:
+        """Unsubscribe from execution events."""
+        await event_bus.unsubscribe("execution.order.submitted", self._on_order_submitted)
+        await event_bus.unsubscribe("execution.order.filled", self._on_order_terminal)
+        await event_bus.unsubscribe("execution.order.cancelled", self._on_order_terminal)
+        await event_bus.unsubscribe("execution.order.rejected", self._on_order_terminal)
+        await event_bus.unsubscribe("execution.portfolio.update", self._on_portfolio_update)
+
+    async def _on_order_submitted(self, channel: str, event: Any) -> None:
+        self.state.open_order_count += 1
+
+    async def _on_order_terminal(self, channel: str, event: Any) -> None:
+        self.state.open_order_count = max(0, self.state.open_order_count - 1)
+        if channel == "execution.order.filled":
+            await self.post_trade_check()
+
+    async def _on_portfolio_update(self, channel: str, event: Any) -> None:
+        if not isinstance(event, dict):
+            return
+        positions = event.get("positions", [])
+        if positions:
+            total_value = sum(
+                float(p.get("market_value", 0) if isinstance(p, dict) else getattr(p, "market_value", 0))
+                for p in positions
+            )
+            if total_value > 0:
+                await self.update_portfolio_value(total_value)
+        account = event.get("account", {})
+        if account:
+            # Use total buying power as a proxy for daily P&L tracking when available
+            bp = account.get("buying_power")
+            if bp is not None:
+                pass  # buying_power alone isn't P&L — leave daily_pnl for explicit updates
 
     def register_greeks_checks(self, provider: Any, greeks_config: Any) -> None:
         """Register a GreeksProvider and GreeksRiskConfig for options checks."""

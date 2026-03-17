@@ -312,6 +312,7 @@ class TestSerializationModule:
 class TestIngestionMsgpack:
     @pytest.fixture
     def client(self):
+        import asyncio
         from trading_platform.dashboard.app import create_app
         from trading_platform.data.config import DataConfig
         from trading_platform.data.manager import DataManager
@@ -319,7 +320,11 @@ class TestIngestionMsgpack:
         bus = EventBus()
         cfg = DataConfig(max_bars_per_request=5)
         dm = DataManager(bus, config=cfg)
-        app, _ = create_app(bus, data_manager=dm)
+        loop = asyncio.new_event_loop()
+        try:
+            app, _ = loop.run_until_complete(create_app(bus, data_manager=dm))
+        finally:
+            loop.close()
         return TestClient(app), dm
 
     def test_rest_bars_msgpack(self, client):
@@ -417,13 +422,9 @@ class TestIngestionMsgpack:
             },
         }
         packed = serialize(msg, Format.MSGPACK)
+        # Single-message ingestion uses fire-and-forget (no ack on success)
         with tc.websocket_connect("/ws/data") as ws:
             ws.send_bytes(packed)
-            # Response is msgpack binary
-            resp_bytes = ws.receive_bytes()
-            resp = deserialize(resp_bytes, Format.MSGPACK)
-            assert resp["status"] == "ok"
-            assert resp["type"] == "bar"
         assert dm.bars_received == 1
 
     def test_ws_text_frame_json_still_works(self, client):
@@ -440,10 +441,10 @@ class TestIngestionMsgpack:
                 "timestamp": "2024-01-15T09:30:00",
             },
         }
+        # Single-message ingestion uses fire-and-forget (no ack on success)
         with tc.websocket_connect("/ws/data") as ws:
             ws.send_text(json.dumps(msg))
-            resp = ws.receive_json()
-            assert resp["status"] == "ok"
+        assert dm.bars_received == 1
 
     def test_ws_batch_binary_msgpack(self, client):
         tc, dm = client

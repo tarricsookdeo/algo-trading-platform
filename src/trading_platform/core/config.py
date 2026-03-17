@@ -7,11 +7,22 @@ Environment variables override TOML values.
 from __future__ import annotations
 
 import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+
+@dataclass
+class StrategyDef:
+    """Definition for a single strategy loaded from config.toml."""
+    name: str
+    module: str
+    class_name: str
+    enabled: bool = True
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 class DataSettings(BaseSettings):
@@ -103,8 +114,9 @@ class Settings(BaseSettings):
     platform: PlatformSettings = Field(default_factory=PlatformSettings)
     risk: RiskSettings = Field(default_factory=RiskSettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
+    strategies: list[StrategyDef] = Field(default_factory=list)
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore", "arbitrary_types_allowed": True}
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -154,6 +166,17 @@ def load_settings(config_path: Path | None = None) -> Settings:
     performance = PerformanceSettings(**performance_data)
     risk = RiskSettings(**risk_data, greeks=greeks_settings)
 
+    # Parse [[strategies]] array of tables
+    strategy_defs: list[StrategyDef] = []
+    for s in toml_data.get("strategies", []):
+        strategy_defs.append(StrategyDef(
+            name=s.get("name", ""),
+            module=s.get("module", ""),
+            class_name=s.get("class_name", ""),
+            enabled=s.get("enabled", True),
+            config=s.get("config", {}),
+        ))
+
     return Settings(
         data=data_cfg,
         public_com=public_com,
@@ -163,4 +186,5 @@ def load_settings(config_path: Path | None = None) -> Settings:
         platform=platform_cfg,
         risk=risk,
         performance=performance,
+        strategies=strategy_defs,
     )

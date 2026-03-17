@@ -250,16 +250,21 @@ class TestPositionsAndAccount:
 class TestSyncPortfolio:
     @pytest.mark.asyncio
     async def test_sync_updates_positions(self, adapter, bus, mock_client):
-        mock_pos = MagicMock()
-        mock_pos.symbol = "BTC-USD"
-        mock_pos.quantity = "0.75"
-        mock_pos.average_price = "42000.0"
-        mock_pos.market_value = "31500.0"
-        mock_pos.unrealized_pnl = "500.0"
+        # v2 API: instrument wrapper, current_value, cost_basis; type must be CRYPTO
+        from types import SimpleNamespace
+        mock_pos = SimpleNamespace(
+            instrument=SimpleNamespace(
+                symbol="BTC-USD",
+                type=SimpleNamespace(value="CRYPTO"),
+            ),
+            quantity="0.75",
+            current_value=31500.0,
+            cost_basis=SimpleNamespace(unit_cost=42000.0, gain_value=500.0),
+        )
 
         mock_portfolio = MagicMock()
         mock_portfolio.positions = [mock_pos]
-        mock_client.get_crypto_portfolio.return_value = mock_portfolio
+        mock_client.get_portfolio.return_value = mock_portfolio
 
         events = []
         async def capture(ch, ev):

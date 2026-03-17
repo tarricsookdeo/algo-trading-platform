@@ -26,7 +26,12 @@ def data_manager(bus):
 
 @pytest.fixture
 def client(bus, data_manager):
-    app, _ = create_app(bus, data_manager=data_manager)
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        app, _ = loop.run_until_complete(create_app(bus, data_manager=data_manager))
+    finally:
+        loop.close()
     return TestClient(app)
 
 
@@ -180,6 +185,7 @@ class TestBatchWebSocket:
             assert "error" in resp["results"][1]
 
     def test_ws_single_still_works(self, client, data_manager):
+        # Single-message ingestion uses fire-and-forget (no ack on success)
         with client.websocket_connect("/ws/data") as ws:
             ws.send_text(json.dumps({
                 "type": "trade",
@@ -188,9 +194,6 @@ class TestBatchWebSocket:
                     "size": 100, "timestamp": "2024-01-15T09:30:00",
                 },
             }))
-            resp = ws.receive_json()
-            assert resp["status"] == "ok"
-            assert resp["type"] == "trade"
         assert data_manager.trades_received == 1
 
 
@@ -203,13 +206,18 @@ class TestMetricsEndpoint:
         assert "message_queue" in data
 
     def test_metrics_endpoint_with_perf(self, bus, data_manager):
+        import asyncio
         from trading_platform.core.metrics import PerformanceMetrics
 
         pm = PerformanceMetrics()
         pm.record_received(10)
         pm.record_processed(5)
 
-        app, _ = create_app(bus, data_manager=data_manager, perf_metrics=pm)
+        loop = asyncio.new_event_loop()
+        try:
+            app, _ = loop.run_until_complete(create_app(bus, data_manager=data_manager, perf_metrics=pm))
+        finally:
+            loop.close()
         client = TestClient(app)
 
         resp = client.get("/api/metrics")
@@ -219,15 +227,20 @@ class TestMetricsEndpoint:
         assert data["performance"]["messages_processed"] == 5
 
     def test_metrics_endpoint_with_mq(self, bus, data_manager):
+        import asyncio
         from trading_platform.core.message_queue import MessageQueue
         from trading_platform.core.metrics import PerformanceMetrics
 
         pm = PerformanceMetrics()
         mq = MessageQueue(max_size=100)
 
-        app, _ = create_app(
-            bus, data_manager=data_manager, perf_metrics=pm, message_queue=mq
-        )
+        loop = asyncio.new_event_loop()
+        try:
+            app, _ = loop.run_until_complete(create_app(
+                bus, data_manager=data_manager, perf_metrics=pm, message_queue=mq
+            ))
+        finally:
+            loop.close()
         client = TestClient(app)
 
         resp = client.get("/api/metrics")

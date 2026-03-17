@@ -6,6 +6,7 @@ for real-time monitoring and data ingestion.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from trading_platform.dashboard.ws import DashboardWSManager
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app(
+async def create_app(
     event_bus: EventBus,
     data_manager: Any = None,
     exec_adapter: Any = None,
@@ -44,6 +45,28 @@ def create_app(
     app = FastAPI(title="Algo Trading Platform", docs_url=None, redoc_url=None)
     ws_manager = DashboardWSManager(event_bus, throttler=throttler, perf_metrics=perf_metrics)
     log = get_logger("dashboard.app")
+
+    # Trade-level P&L history (capped at 500 entries)
+    _pnl_history: list[dict[str, Any]] = []
+    _MAX_PNL_HISTORY = 500
+
+    async def _on_bracket_terminal(channel: str, event: Any) -> None:
+        if not isinstance(event, dict):
+            return
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbol": event.get("symbol", ""),
+            "bracket_id": (event.get("bracket_id", "") or "")[:8],
+            "outcome": "win" if "take_profit" in channel else "loss",
+            "exit_price": event.get("exit_price"),
+        }
+        _pnl_history.append(entry)
+        if len(_pnl_history) > _MAX_PNL_HISTORY:
+            _pnl_history.pop(0)
+
+    from trading_platform.bracket.enums import BracketChannel
+    await event_bus.subscribe(BracketChannel.BRACKET_TAKE_PROFIT_FILLED, _on_bracket_terminal)
+    await event_bus.subscribe(BracketChannel.BRACKET_STOPPED_OUT, _on_bracket_terminal)
 
     # Store references for endpoint handlers
     app.state.data_manager = data_manager
@@ -125,10 +148,27 @@ def create_app(
         ea = app.state.exec_adapter
         if not ea:
             return JSONResponse({"orders": []})
-        tracked = getattr(ea, "_tracked_orders", {})
+        # Collect from the router's registered adapters or directly from the adapter
+        sub_adapters = list(getattr(ea, "_adapters", {}).values()) or [ea]
         orders = []
-        for oid in list(tracked):
-            orders.append({"order_id": oid, "status": "tracked"})
+        seen: set[str] = set()
+        for adapter in sub_adapters:
+            tracked = getattr(adapter, "_tracked_orders", {})
+            details = getattr(adapter, "_order_details", {})
+            for oid in list(tracked):
+                if oid in seen:
+                    continue
+                seen.add(oid)
+                d = details.get(oid, {})
+                orders.append({
+                    "order_id": oid,
+                    "symbol": d.get("symbol", ""),
+                    "side": d.get("side", ""),
+                    "order_type": d.get("order_type", ""),
+                    "quantity": d.get("quantity", ""),
+                    "asset_class": d.get("asset_class", "equity"),
+                    "status": "open",
+                })
         return JSONResponse({"orders": orders})
 
     @app.post("/api/orders/{order_id}/cancel")
@@ -200,6 +240,10 @@ def create_app(
             pnl_data["cumulative_pnl"] = sum(strategy_pnl.values())
         return JSONResponse(pnl_data)
 
+    @app.get("/api/pnl/history")
+    async def get_pnl_history() -> JSONResponse:
+        return JSONResponse({"history": list(_pnl_history)})
+
     # ── Bracket Orders ────────────────────────────────────────────────
 
     @app.get("/api/brackets")
@@ -207,9 +251,16 @@ def create_app(
         bm = app.state.bracket_manager
         if not bm:
             return JSONResponse({"brackets": []})
-        brackets = bm.get_all_brackets()
+        from trading_platform.bracket.enums import TERMINAL_STATES
+        all_brackets = bm.get_all_brackets()
+        active = [b for b in all_brackets if b.state not in TERMINAL_STATES]
+        completed = sorted(
+            [b for b in all_brackets if b.state in TERMINAL_STATES],
+            key=lambda b: b.completed_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[:20]
         result = []
-        for b in brackets:
+        for b in active + completed:
             d = b.model_dump(mode="json") if hasattr(b, "model_dump") else {"bracket_id": str(b)}
             result.append(d)
         return JSONResponse({"brackets": result})
